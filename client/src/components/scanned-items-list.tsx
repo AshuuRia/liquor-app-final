@@ -387,7 +387,7 @@ export function ScannedItemsList({ sessionId, refreshTrigger }: ScannedItemsList
           
           return {
             "Upc": `"${item.scannedBarcode}"`,
-            "Department": "Liquor",
+            "Department": "Liquor 2",
             "qty": "1",
             "cents": cents.toString(),
             "incltaxes": "n",
