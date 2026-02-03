@@ -195,6 +195,61 @@ export default function LiquorConverter() {
     loadLiquorData();
   };
 
+  const onExcelUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    setProcessingState({
+      isProcessing: true,
+      progress: 0,
+      currentRow: 0,
+      totalRows: 0,
+    });
+    setHasError(false);
+    setIsComplete(false);
+
+    const formData = new FormData();
+    formData.append('file', file);
+
+    try {
+      setProcessingState(prev => ({ ...prev, progress: 25 }));
+      const response = await fetch('/api/upload-liquor-excel', {
+        method: 'POST',
+        body: formData,
+      });
+
+      setProcessingState(prev => ({ ...prev, progress: 75 }));
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
+      }
+
+      const result = await response.json();
+      setProcessingState(prev => ({ ...prev, progress: 100, isProcessing: false }));
+
+      if (result.success) {
+        setProcessedData(result);
+        setIsComplete(true);
+        setShouldRedirect(true);
+        toast({
+          title: "Excel imported successfully!",
+          description: `${result.totalRecords} records loaded from Excel file`,
+        });
+      }
+    } catch (error) {
+      console.error('Excel upload error:', error);
+      setProcessingState(prev => ({ ...prev, isProcessing: false }));
+      setHasError(true);
+      const errorMessage = error instanceof Error ? error.message : "Unknown error";
+      toast({
+        variant: "destructive",
+        title: "Import failed",
+        description: errorMessage,
+      });
+    }
+  };
+
   return (
     <div className="min-h-screen bg-background">
       {/* Header */}
@@ -264,6 +319,19 @@ export default function LiquorConverter() {
                         <Download className="h-4 w-4 mr-2" />
                         Download Data
                       </Button>
+                      <div className="relative">
+                        <input
+                          type="file"
+                          accept=".xlsx,.xls"
+                          onChange={onExcelUpload}
+                          className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                          id="excel-upload"
+                        />
+                        <Button variant="secondary">
+                          <Book className="h-4 w-4 mr-2" />
+                          Import Excel
+                        </Button>
+                      </div>
                     </div>
                   </div>
                 )}
@@ -274,10 +342,25 @@ export default function LiquorConverter() {
                     <p className="text-sm text-muted-foreground mb-4">
                       Unable to load data from the Michigan state website
                     </p>
-                    <Button onClick={retryDataLoad} variant="outline" data-testid="button-retry">
-                      <RefreshCw className="h-4 w-4 mr-2" />
-                      Retry Loading
-                    </Button>
+                    <div className="flex justify-center space-x-4">
+                      <Button onClick={retryDataLoad} variant="outline" data-testid="button-retry">
+                        <RefreshCw className="h-4 w-4 mr-2" />
+                        Retry Loading
+                      </Button>
+                      <div className="relative">
+                        <input
+                          type="file"
+                          accept=".xlsx,.xls"
+                          onChange={onExcelUpload}
+                          className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                          id="excel-upload-error"
+                        />
+                        <Button variant="secondary">
+                          <Book className="h-4 w-4 mr-2" />
+                          Import Excel
+                        </Button>
+                      </div>
+                    </div>
                   </div>
                 )}
               </div>

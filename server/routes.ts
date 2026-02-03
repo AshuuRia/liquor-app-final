@@ -1247,6 +1247,90 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Upload liquor data from Excel
+  app.post("/api/upload-liquor-excel", upload.single('file'), async (req, res) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ error: "No file uploaded" });
+      }
+
+      console.log('Processing liquor data Excel file:', {
+        filename: req.file.originalname,
+        mimetype: req.file.mimetype,
+        size: req.file.size
+      });
+
+      const workbook = XLSX.read(req.file.buffer, { type: 'buffer' });
+      const firstSheetName = workbook.SheetNames[0];
+      const worksheet = workbook.Sheets[firstSheetName];
+      const worksheetData = XLSX.utils.sheet_to_json(worksheet);
+
+      if (worksheetData.length === 0) {
+        return res.status(400).json({ error: "File appears to be empty" });
+      }
+
+      const records = [];
+      const brands = new Set();
+      const vendors = new Set();
+      const prices: number[] = [];
+
+      for (const row of worksheetData as any[]) {
+        const record = {
+          liquorCode: String(row["Liquor Code"] || row["liquorCode"] || "").trim(),
+          brandName: String(row["Brand Name"] || row["brandName"] || "").trim(),
+          adaNumber: String(row["ADA Number"] || row["adaNumber"] || "").trim(),
+          adaName: String(row["ADA Name"] || row["adaName"] || "").trim(),
+          vendorName: String(row["Vendor Name"] || row["vendorName"] || "").trim(),
+          proof: String(row["Proof"] || row["proof"] || ""),
+          bottleSize: String(row["Bottle Size"] || row["bottleSize"] || ""),
+          packSize: String(row["Pack Size"] || row["packSize"] || ""),
+          onPremisePrice: parseFloat(String(row["On Premise Price"] || row["onPremisePrice"] || "0").replace(/[$,]/g, '')),
+          offPremisePrice: parseFloat(String(row["Off Premise Price"] || row["offPremisePrice"] || "0").replace(/[$,]/g, '')),
+          shelfPrice: parseFloat(String(row["Shelf Price"] || row["shelfPrice"] || "0").replace(/[$,]/g, '')),
+          upcCode1: String(row["UPC Code 1"] || row["upcCode1"] || "").trim(),
+          upcCode2: String(row["UPC Code 2"] || row["upcCode2"] || "").trim(),
+          effectiveDate: String(row["Effective Date"] || row["effectiveDate"] || ""),
+        };
+
+        if (record.liquorCode && record.brandName) {
+          records.push(record);
+          if (record.brandName) brands.add(record.brandName);
+          if (record.vendorName) vendors.add(record.vendorName);
+          if (!isNaN(record.shelfPrice)) prices.push(record.shelfPrice);
+        }
+      }
+
+      if (records.length === 0) {
+        return res.status(400).json({ error: "No valid liquor records found in Excel file" });
+      }
+
+      // Clear existing records and save new ones
+      await storage.clearLiquorRecords();
+      for (const record of records) {
+        await storage.createLiquorRecord(record);
+      }
+
+      const avgPrice = prices.length > 0 
+        ? prices.reduce((sum, price) => sum + price, 0) / prices.length 
+        : 0;
+
+      res.json({
+        success: true,
+        totalRecords: records.length,
+        uniqueBrands: brands.size,
+        uniqueVendors: vendors.size,
+        avgPrice: Number(avgPrice.toFixed(2))
+      });
+
+    } catch (error) {
+      console.error('Error processing liquor Excel file:', error);
+      res.status(500).json({ 
+        error: "Failed to process Excel file",
+        details: error instanceof Error ? error.message : "Unknown error"
+      });
+    }
+  });
+
   // Set active session
   app.post("/api/sessions/:sessionId/activate", async (req, res) => {
     try {
