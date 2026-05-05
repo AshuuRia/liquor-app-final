@@ -420,6 +420,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Convert a camera-decoded barcode back to what's printed on the bottle.
+  // Cameras often decode UPC-A (12 digits) as EAN-13 (13 digits, leading 0 added),
+  // or GTIN-14 (14 digits, two leading zeros). Strip the extra prefix so the stored
+  // value matches what the user physically sees on the label.
+  function toBottleBarcode(barcode: string): string {
+    if (/^\d+$/.test(barcode)) {
+      if (barcode.length === 14 && barcode.startsWith('00')) return barcode.slice(2);
+      if (barcode.length === 13 && barcode.startsWith('0'))  return barcode.slice(1);
+    }
+    return barcode;
+  }
+
   // Scan barcode and lookup product
   app.post("/api/scan-barcode", async (req, res) => {
     console.log('Processing barcode scan request...');
@@ -479,7 +491,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         await storage.addScannedItem({
           sessionId,
           liquorRecordId: matchedProduct.id,
-          scannedBarcode: barcode,
+          scannedBarcode: toBottleBarcode(barcode),
           scannedAt: new Date().toISOString(),
           quantity: 1,
         });
@@ -1028,7 +1040,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       await storage.addScannedItem({
         sessionId,
         liquorRecordId: liquorRecord.id,
-        scannedBarcode: scannedBarcode || liquorRecord.upcCode1 || 'manual-search',
+        scannedBarcode: scannedBarcode ? toBottleBarcode(scannedBarcode) : (liquorRecord.upcCode1 ? toBottleBarcode(liquorRecord.upcCode1) : 'manual-search'),
         scannedAt: new Date().toISOString(),
         quantity: 1,
       });
