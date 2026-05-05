@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { BrowserMultiFormatReader } from "@zxing/browser";
+import { DecodeHintType } from "@zxing/library";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -84,7 +85,13 @@ export function BarcodeScanner({ onScan, isActive, onToggle }: BarcodeScannerPro
   // ── ZXing fallback loop ──────────────────────────────────────────────────
   const startZxingScanner = useCallback(async () => {
     if (!videoRef.current) return;
-    zxingReader.current = new BrowserMultiFormatReader();
+
+    // TRY_HARDER makes ZXing spend more effort per frame — critical for
+    // reading barcodes that are small or at a slight angle (i.e. from a distance)
+    const hints = new Map();
+    hints.set(DecodeHintType.TRY_HARDER, true);
+
+    zxingReader.current = new BrowserMultiFormatReader(hints);
 
     await zxingReader.current.decodeFromVideoDevice(
       undefined,
@@ -102,11 +109,17 @@ export function BarcodeScanner({ onScan, isActive, onToggle }: BarcodeScannerPro
   const startScanning = useCallback(async () => {
     setError("");
     try {
+      // High resolution gives the decoder many more pixels to work with,
+      // which is the single biggest factor in reading barcodes from a distance.
+      // The iPhone 17 Pro Max camera can do 4K — ask for it and let the OS
+      // downscale if needed. Continuous autofocus keeps things sharp while moving.
       const constraints: MediaStreamConstraints = {
         video: {
           facingMode: "environment",
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
+          width:  { ideal: 3840, min: 1280 },
+          height: { ideal: 2160, min: 720 },
+          // @ts-ignore — advanced constraints are valid but not in all TS definitions
+          advanced: [{ focusMode: "continuous" }],
         },
       };
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
