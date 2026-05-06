@@ -1,43 +1,63 @@
-# Overview
+# Liquor Inventory System
 
-This is a full-stack web application for processing and converting liquor inventory data from fixed-width text files to Excel format. The application parses structured text files containing liquor records with specific field positions, extracts the data, and provides a user-friendly interface for viewing statistics and downloading the processed data as Excel files.
+A full-stack liquor inventory and label management app that auto-loads pricing data from the Michigan LARA Price Book, supports barcode scanning, and generates shelf labels for Brother QL printers.
 
-# User Preferences
+## Run & Operate
 
-Preferred communication style: Simple, everyday language.
+| Command | Purpose |
+|---|---|
+| `npm run dev` | Start dev server (port 5000) |
+| `npm run build` | Build for production |
+| `npm run start` | Run production build |
+| `npm run db:push` | Push schema to PostgreSQL |
 
-# System Architecture
+Required env vars: `DATABASE_URL` (PostgreSQL, provisioned via Replit DB)
 
-## Frontend Architecture
-- **Framework**: React with TypeScript and Vite for development tooling
-- **Routing**: Wouter for lightweight client-side routing
-- **State Management**: TanStack Query for server state management and caching
-- **UI Components**: Radix UI primitives with shadcn/ui component library
-- **Styling**: Tailwind CSS with custom design tokens and CSS variables for theming
-- **Form Handling**: React Hook Form with Zod validation schemas
+## Stack
 
-## Backend Architecture
-- **Runtime**: Node.js with Express.js framework
-- **Language**: TypeScript with ES modules
-- **File Processing**: Multer for file uploads with memory storage, XLSX library for Excel generation
-- **Development**: Vite middleware integration for hot module replacement in development
-- **Error Handling**: Centralized error middleware with structured error responses
+- **Frontend**: React 18 + TypeScript, Vite, Wouter (routing), TanStack Query, Tailwind CSS, shadcn/ui (Radix UI)
+- **Backend**: Node.js 20, Express.js, TypeScript (ESM), tsx (dev), esbuild (prod)
+- **Database**: PostgreSQL via Neon serverless + Drizzle ORM
+- **Barcode**: `@zxing/library`, `@undecaf/zbar-wasm` (WASM, client-side)
+- **Files**: Multer (uploads), XLSX (Excel generation)
 
-## Data Storage Solutions
-- **Database**: PostgreSQL with Drizzle ORM for type-safe database operations
-- **Connection**: Neon Database serverless PostgreSQL connector
-- **Schema Management**: Drizzle Kit for migrations and schema management
-- **Development Storage**: In-memory storage implementation for development/testing
-- **Session Management**: PostgreSQL-backed session store using connect-pg-simple
+## Where things live
 
-## Authentication and Authorization
-- **Session-based**: Express session middleware with PostgreSQL session storage
-- **User Management**: Basic user creation and lookup functionality
-- **Security**: Built-in session security with HTTP-only cookies
+- `client/src/pages/` — main views (converter, scanner, price-compare)
+- `client/src/components/` — UI components (barcode-scanner, file-upload, etc.)
+- `server/routes.ts` — all API routes
+- `server/storage.ts` — data access layer (currently `MemStorage`; `DatabaseStorage` stub present)
+- `shared/schema.ts` — Drizzle schema + Zod types (source of truth)
+- `drizzle.config.ts` — DB config
 
-## External Dependencies
-- **Database**: Neon Database (serverless PostgreSQL)
-- **File Processing**: Fixed-width text file parsing with specific field specifications
-- **UI Components**: Radix UI ecosystem for accessible components
-- **Development Tools**: Replit integration for development environment
-- **Build Tools**: Vite for frontend bundling, esbuild for backend compilation
+## Architecture decisions
+
+- Uses `MemStorage` in-memory store for all data; `DatabaseStorage` is stubbed but not implemented
+- Liquor data is fetched from Michigan state website on every app startup via `POST /api/fetch-liquor-data`
+- Labels are generated as HTML/CSS optimized for 2.4"×1.2" Brother QL-820NWB printer format
+- No authentication or login flow — the app is open access by design
+- Sessions (scanning sessions) are application-level, not HTTP sessions; passport/connect-pg-simple are unused dependencies
+
+## Product
+
+- Auto-fetches and parses ~13,900 liquor price records from Michigan LARA Price Book
+- Barcode scanner page (camera-based) looks up scanned items against the price book
+- Groups scanned items into named sessions for batch label printing
+- Custom name mapping via CSV/Excel upload to override product labels
+- Price comparison view and Excel export of processed data
+
+## User Preferences
+
+- Preferred communication style: Simple, everyday language.
+
+## Gotchas
+
+- `DatabaseStorage` class exists in `storage.ts` but all methods throw — only `MemStorage` is active
+- Data reloads from michigan.gov on every server restart (takes ~7 seconds)
+- `passport`, `passport-local`, `connect-pg-simple`, `express-session`, `memorystore` are installed but not wired up
+
+## Pointers
+
+- Schema: `shared/schema.ts`
+- API routes: `server/routes.ts`
+- Replit DB skill: `.local/skills/database/SKILL.md`
