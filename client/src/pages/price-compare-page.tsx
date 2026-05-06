@@ -22,6 +22,7 @@ interface ComparisonRow {
   department: string;
   liquorCode: string;
   matched: boolean;
+  matchedBy: 'upc' | 'code' | null;
   multipleMatches: boolean;
   allMatches?: LiquorRecord[];
   resolvedByUser: boolean;
@@ -92,6 +93,7 @@ export default function PriceComparePage() {
   const [sortKey, setSortKey]     = useState<SortKey>("name");
   const [sortDir, setSortDir]     = useState<SortDir>("asc");
   const [search, setSearch]       = useState("");
+  const [dbEmpty, setDbEmpty]     = useState(false);
 
   // Disambiguation dialog state
   const [disambigRow, setDisambigRow] = useState<{ origIdx: number; row: ComparisonRow } | null>(null);
@@ -115,6 +117,15 @@ export default function PriceComparePage() {
       const data = await res.json();
       if (!data.success) throw new Error(data.error || "Unknown error");
 
+      if (data.dbEmpty) {
+        setDbEmpty(true);
+        setRows([]);
+        toast({ variant: "destructive", title: "Michigan database not loaded", description: "Go to the home page first to load the Michigan price book, then come back." });
+        return;
+      }
+
+      setDbEmpty(false);
+
       // Hydrate with client-side editable fields
       const hydrated: ComparisonRow[] = data.rows.map((r: any) => ({
         ...r,
@@ -126,12 +137,13 @@ export default function PriceComparePage() {
       setRows(hydrated);
       setFilter("all");
 
-      const changed   = hydrated.filter(r => r.priceDiff !== null && r.priceDiff !== 0).length;
-      const notFound  = hydrated.filter(r => !r.matched).length;
-      const ambiguous = hydrated.filter(r => r.multipleMatches).length;
+      const changed    = hydrated.filter(r => r.priceDiff !== null && r.priceDiff !== 0).length;
+      const notFound   = hydrated.filter(r => !r.matched).length;
+      const ambiguous  = hydrated.filter(r => r.multipleMatches).length;
+      const codeMatched = hydrated.filter(r => r.matchedBy === 'code').length;
       toast({
         title: "Comparison ready",
-        description: `${hydrated.length} products · ${changed} price changes · ${notFound} not found in MI DB${ambiguous ? ` · ${ambiguous} need review` : ""}`,
+        description: `${hydrated.length} products · ${changed} price changes · ${notFound} not found in MI DB${codeMatched ? ` · ${codeMatched} matched by liquor code` : ""}${ambiguous ? ` · ${ambiguous} need review` : ""}`,
       });
     } catch (err: any) {
       toast({ variant: "destructive", title: "Import failed", description: err.message });
@@ -309,6 +321,23 @@ export default function PriceComparePage() {
       </header>
 
       <main className="flex-1 max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 py-6 space-y-5">
+
+        {/* DB not loaded warning */}
+        {dbEmpty && (
+          <div className="flex items-start gap-3 bg-red-50 border border-red-200 rounded-lg px-4 py-4 text-sm text-red-800">
+            <AlertCircle className="h-5 w-5 mt-0.5 flex-shrink-0 text-red-500" />
+            <div>
+              <p className="font-semibold">Michigan price book not loaded</p>
+              <p className="mt-1 text-red-700">
+                The Michigan database hasn't been loaded yet this session.{" "}
+                <Link href="/" className="underline font-medium hover:text-red-900">
+                  Go to the home page
+                </Link>{" "}
+                to load it, then come back and upload your CSV again.
+              </p>
+            </div>
+          </div>
+        )}
 
         {/* Upload zone */}
         <div
@@ -511,6 +540,11 @@ export default function PriceComparePage() {
                               <p className="font-medium text-foreground leading-tight">{row.name}</p>
                               {row.michiganName && row.michiganName !== row.name && (
                                 <p className="text-xs text-muted-foreground mt-0.5">MI: {row.michiganName}</p>
+                              )}
+                              {row.matchedBy === 'code' && (
+                                <p className="text-xs text-blue-500 mt-0.5" title="No UPC match found — matched using liquor code instead">
+                                  matched by liquor code
+                                </p>
                               )}
                             </div>
                           </div>

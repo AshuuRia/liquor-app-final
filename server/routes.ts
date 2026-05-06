@@ -1276,6 +1276,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { csvText } = req.body;
       if (!csvText) return res.status(400).json({ success: false, error: "No CSV text provided" });
 
+      // Check if Michigan DB is loaded at all
+      const dbCount = await storage.getLiquorRecordCount();
+      if (dbCount === 0) {
+        return res.json({ success: true, rows: [], totalRows: 0, dbEmpty: true });
+      }
+
       // Simple but robust CSV parser that handles quoted fields
       function parseCsvLine(line: string): string[] {
         const fields: string[] = [];
@@ -1340,8 +1346,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
           registerPrice = parseFloat(rawPrice.replace(/[^0-9.]/g, '')) || 0;
         }
 
-        // Look up in Michigan DB
-        const matches = await storage.findAllLiquorByBarcode(rawUpc);
+        // Look up in Michigan DB — try UPC first, fall back to liquor code
+        let matches = await storage.findAllLiquorByBarcode(rawUpc);
+        let matchedBy: 'upc' | 'code' | null = matches.length > 0 ? 'upc' : null;
+
+        if (matches.length === 0 && sizeCode) {
+          matches = await storage.findAllLiquorByCode(sizeCode);
+          if (matches.length > 0) matchedBy = 'code';
+        }
+
         const match   = matches[0] || null;
         const michiganPrice = match?.shelfPrice ?? null;
         const priceDiff = michiganPrice !== null ? Math.round((michiganPrice - registerPrice) * 100) / 100 : null;
@@ -1353,6 +1366,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           department:        dept,
           liquorCode:        sizeCode,
           matched:           !!match,
+          matchedBy,
           multipleMatches:   matches.length > 1,
           allMatches:        matches.length > 1 ? matches : undefined,
           michiganPrice,

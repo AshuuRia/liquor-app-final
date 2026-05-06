@@ -12,6 +12,8 @@ export interface IStorage {
   clearLiquorRecords(): Promise<void>;
   findLiquorByBarcode(barcode: string): Promise<LiquorRecord | undefined>;
   findAllLiquorByBarcode(barcode: string): Promise<LiquorRecord[]>;
+  findAllLiquorByCode(code: string): Promise<LiquorRecord[]>;
+  getLiquorRecordCount(): Promise<number>;
   
   // Scanned items methods
   addScannedItem(item: InsertScannedItem): Promise<ScannedItem>;
@@ -120,6 +122,22 @@ export class MemStorage implements IStorage {
       if (record.upcCode1 === barcode || record.upcCode2 === barcode) return true;
       return normalizedUpc1 === normalizedBarcode || normalizedUpc2 === normalizedBarcode;
     });
+  }
+
+  async findAllLiquorByCode(code: string): Promise<LiquorRecord[]> {
+    const normalizeCode = (c: string | null): string => {
+      if (!c) return '';
+      return c.replace(/^0+/, '') || '0';
+    };
+    const normalized = normalizeCode(code);
+    if (!normalized || normalized === '0') return [];
+    return Array.from(this.liquorRecords.values()).filter(record =>
+      normalizeCode(record.liquorCode) === normalized
+    );
+  }
+
+  async getLiquorRecordCount(): Promise<number> {
+    return this.liquorRecords.size;
   }
 
   async addScannedItem(insertItem: InsertScannedItem): Promise<ScannedItem> {
