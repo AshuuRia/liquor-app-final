@@ -17,7 +17,7 @@ Required env vars: `DATABASE_URL` (PostgreSQL, provisioned via Replit DB)
 
 - **Frontend**: React 18 + TypeScript, Vite, Wouter (routing), TanStack Query, Tailwind CSS, shadcn/ui (Radix UI)
 - **Backend**: Node.js 20, Express.js, TypeScript (ESM), tsx (dev), esbuild (prod)
-- **Database**: PostgreSQL via Neon serverless + Drizzle ORM
+- **Database**: PostgreSQL via `pg` (node-postgres) + Drizzle ORM — works with Neon, Replit Postgres, or any Postgres URL
 - **Barcode**: `@zxing/library`, `@undecaf/zbar-wasm` (WASM, client-side)
 - **Files**: Multer (uploads), XLSX (Excel generation)
 

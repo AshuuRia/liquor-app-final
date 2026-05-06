@@ -311,9 +311,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       await storage.clearLiquorRecords();
       console.log('Cleared existing liquor records');
       
-      for (const record of records) {
-        await storage.createLiquorRecord(record);
-      }
+      await storage.bulkCreateLiquorRecords(records);
       console.log(`Saved ${records.length} liquor records to storage`);
 
       const result = {
@@ -389,9 +387,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       await storage.clearLiquorRecords();
       console.log('Cleared existing liquor records');
       
-      for (const record of records) {
-        await storage.createLiquorRecord(record);
-      }
+      await storage.bulkCreateLiquorRecords(records);
       console.log(`Saved ${records.length} liquor records to storage`);
 
       const result = {
@@ -978,9 +974,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       await storage.clearLiquorRecords();
       console.log('Cleared existing liquor records');
       
-      for (const record of records) {
-        await storage.createLiquorRecord(record);
-      }
+      await storage.bulkCreateLiquorRecords(records);
       console.log(`Saved ${records.length} liquor records to storage`);
 
       const result = {
