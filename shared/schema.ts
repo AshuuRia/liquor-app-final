@@ -65,6 +65,7 @@ export const scannedItems = pgTable("scanned_items", {
   scannedBarcode: text("scanned_barcode").notNull(),
   scannedAt: text("scanned_at").notNull(),
   quantity: integer("quantity").default(1),
+  overridePrice: real("override_price"), // user-set price override
 });
 
 export const insertScannedItemSchema = createInsertSchema(scannedItems).omit({

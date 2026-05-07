@@ -526,7 +526,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
           const product = await storage.findLiquorByBarcode(item.scannedBarcode);
           return {
             ...item,
-            product: product || null,
+            product: product ? {
+              ...product,
+              shelfPrice: (item.overridePrice !== null && item.overridePrice !== undefined)
+                ? item.overridePrice
+                : product.shelfPrice,
+            } : null,
           };
         })
       );
@@ -1068,50 +1073,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       console.log('Searching liquor records for:', query);
       
-      const allRecords = await storage.getLiquorRecords();
-      const searchTerm = query.toLowerCase().trim();
+      const { results, totalFound } = await storage.searchLiquorRecords(query.trim(), 10);
       
-      // Helper function to normalize UPC codes by removing leading zeros
-      const normalizeUpc = (upc: string | null): string => {
-        if (!upc) return '';
-        return upc.replace(/^0+/, '') || '0';
-      };
-      
-      const normalizedSearchTerm = normalizeUpc(searchTerm);
-      
-      const results = allRecords.filter(record => {
-        // Search by liquor code
-        if (record.liquorCode?.toLowerCase().includes(searchTerm)) return true;
-        
-        // Search by brand name
-        if (record.brandName?.toLowerCase().includes(searchTerm)) return true;
-        
-        // Search by UPC codes (exact and normalized)
-        const normalizedUpc1 = normalizeUpc(record.upcCode1);
-        const normalizedUpc2 = normalizeUpc(record.upcCode2);
-        
-        if (record.upcCode1?.includes(searchTerm) || 
-            record.upcCode2?.includes(searchTerm) ||
-            normalizedUpc1.includes(normalizedSearchTerm) ||
-            normalizedUpc2.includes(normalizedSearchTerm)) {
-          return true;
-        }
-        
-        // Search by vendor name
-        if (record.vendorName?.toLowerCase().includes(searchTerm)) return true;
-        
-        return false;
-      });
-
-      // Limit results to first 10 for dropdown
-      const limitedResults = results.slice(0, 10);
-      
-      console.log(`Found ${results.length} results, returning first ${limitedResults.length}`);
+      console.log(`Found ${totalFound} results, returning first ${results.length}`);
       
       res.json({
         success: true,
-        results: limitedResults,
-        totalFound: results.length
+        results,
+        totalFound
       });
     } catch (error) {
       console.error("Search error:", error);

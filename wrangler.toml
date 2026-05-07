@@ -1,0 +1,8 @@
+name = "liquor-inventory"
+compatibility_date = "2024-09-23"
+compatibility_flags = ["nodejs_compat"]
+pages_build_output_dir = "dist/public"
+
+# Environment variables that are NOT secrets go here.
+# Set DATABASE_URL as a secret in the Cloudflare Pages dashboard:
+#   Pages > Your Project > Settings > Environment Variables > Add secret

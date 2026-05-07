@@ -1,31 +1,41 @@
+import { neon } from '@neondatabase/serverless';
+import { drizzle } from 'drizzle-orm/neon-http';
+import { eq, or, sql, ilike } from 'drizzle-orm';
 import {
   type User, type InsertUser,
   type LiquorRecord, type InsertLiquorRecord,
   type ScannedItem, type InsertScannedItem,
   type Session, type InsertSession,
   type CustomNameMapping, type InsertCustomNameMapping,
-  scannedItems, sessions, customNameMappings, users,
+  liquorRecords, scannedItems, sessions, customNameMappings, users,
 } from "@shared/schema";
 import { randomUUID } from "crypto";
-import { drizzle } from "drizzle-orm/node-postgres";
-import pg from "pg";
-const { Pool } = pg;
-import { eq, sql, or } from "drizzle-orm";
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+export function normalizeUpc(upc: string | null | undefined): string {
+  if (!upc) return '';
+  return upc.replace(/^0+/, '') || '0';
+}
+
+// ── Storage interface ─────────────────────────────────────────────────────────
 
 export interface IStorage {
   getUser(id: string): Promise<User | undefined>;
   getUserByUsername(username: string): Promise<User | undefined>;
   createUser(user: InsertUser): Promise<User>;
 
-  // Liquor record methods (always in-memory — re-fetched from Michigan on startup)
+  // Liquor record methods
   createLiquorRecord(record: InsertLiquorRecord): Promise<LiquorRecord>;
   bulkCreateLiquorRecords(records: InsertLiquorRecord[]): Promise<void>;
   getLiquorRecords(): Promise<LiquorRecord[]>;
+  getLiquorRecordById(id: string): Promise<LiquorRecord | undefined>;
   clearLiquorRecords(): Promise<void>;
   findLiquorByBarcode(barcode: string): Promise<LiquorRecord | undefined>;
   findAllLiquorByBarcode(barcode: string): Promise<LiquorRecord[]>;
   findAllLiquorByCode(code: string): Promise<LiquorRecord[]>;
   getLiquorRecordCount(): Promise<number>;
+  searchLiquorRecords(query: string, limit?: number): Promise<{ results: LiquorRecord[], totalFound: number }>;
 
   // Scanned items methods (persisted)
   addScannedItem(item: InsertScannedItem): Promise<ScannedItem>;
@@ -50,32 +60,20 @@ export interface IStorage {
   getCustomNameByUpc(upcCode: string): Promise<string | undefined>;
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-function normalizeUpc(upc: string | null | undefined): string {
-  if (!upc) return '';
-  return upc.replace(/^0+/, '') || '0';
-}
-
-// ── DatabaseStorage ──────────────────────────────────────────────────────────
-// Liquor records stay in memory (they're always cleared & re-fetched on startup).
-// Sessions, scanned items, and custom name mappings go to the database so they
-// survive server restarts / sleep cycles.
+// ── DatabaseStorage ───────────────────────────────────────────────────────────
+// All data (including liquor records) lives in Neon PostgreSQL.
+// Uses the Neon HTTP driver — works in both Node.js and Cloudflare Workers.
 
 export class DatabaseStorage implements IStorage {
   private db: ReturnType<typeof drizzle>;
-
-  // In-memory liquor store
-  private liquorMap = new Map<string, LiquorRecord>();
   private users = new Map<string, User>();
 
-  constructor() {
-    if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL is required");
-    const pool = new Pool({ connectionString: process.env.DATABASE_URL });
-    this.db = drizzle(pool);
+  constructor(databaseUrl: string) {
+    const client = neon(databaseUrl);
+    this.db = drizzle(client);
   }
 
-  // ── Users ──────────────────────────────────────────────────────────────────
+  // ── Users (in-memory, not persisted — unused in practice) ─────────────────
   async getUser(id: string): Promise<User | undefined> {
     return this.users.get(id);
   }
@@ -89,38 +87,31 @@ export class DatabaseStorage implements IStorage {
     return user;
   }
 
-  // ── Liquor records (in-memory) ─────────────────────────────────────────────
+  // ── Liquor records (database) ──────────────────────────────────────────────
+
   async createLiquorRecord(record: InsertLiquorRecord): Promise<LiquorRecord> {
-    const id = randomUUID();
-    const r: LiquorRecord = {
-      id, ...record,
-      adaNumber: record.adaNumber ?? null,
-      adaName: record.adaName ?? null,
-      vendorName: record.vendorName ?? null,
-      proof: record.proof ?? null,
-      bottleSize: record.bottleSize ?? null,
-      packSize: record.packSize ?? null,
-      onPremisePrice: record.onPremisePrice ?? null,
-      offPremisePrice: record.offPremisePrice ?? null,
-      shelfPrice: record.shelfPrice ?? null,
-      upcCode1: record.upcCode1 ?? null,
-      upcCode2: record.upcCode2 ?? null,
-      effectiveDate: record.effectiveDate ?? null,
-    };
-    this.liquorMap.set(id, r);
-    return r;
+    const result = await this.db.insert(liquorRecords).values(record).returning();
+    return result[0];
   }
 
   async bulkCreateLiquorRecords(records: InsertLiquorRecord[]): Promise<void> {
-    for (const r of records) await this.createLiquorRecord(r);
+    const CHUNK = 500;
+    for (let i = 0; i < records.length; i += CHUNK) {
+      await this.db.insert(liquorRecords).values(records.slice(i, i + CHUNK));
+    }
   }
 
   async getLiquorRecords(): Promise<LiquorRecord[]> {
-    return Array.from(this.liquorMap.values());
+    return this.db.select().from(liquorRecords);
+  }
+
+  async getLiquorRecordById(id: string): Promise<LiquorRecord | undefined> {
+    const r = await this.db.select().from(liquorRecords).where(eq(liquorRecords.id, id)).limit(1);
+    return r[0];
   }
 
   async clearLiquorRecords(): Promise<void> {
-    this.liquorMap.clear();
+    await this.db.delete(liquorRecords);
   }
 
   async findLiquorByBarcode(barcode: string): Promise<LiquorRecord | undefined> {
@@ -129,28 +120,51 @@ export class DatabaseStorage implements IStorage {
 
   async findAllLiquorByBarcode(barcode: string): Promise<LiquorRecord[]> {
     const norm = normalizeUpc(barcode);
-    return Array.from(this.liquorMap.values()).filter(r => {
-      if (r.upcCode1 === barcode || r.upcCode2 === barcode) return true;
-      return normalizeUpc(r.upcCode1) === norm || normalizeUpc(r.upcCode2) === norm;
-    });
+    return this.db.select().from(liquorRecords).where(
+      or(
+        eq(liquorRecords.upcCode1, barcode),
+        eq(liquorRecords.upcCode2, barcode),
+        sql`ltrim(${liquorRecords.upcCode1}, '0') = ${norm}`,
+        sql`ltrim(${liquorRecords.upcCode2}, '0') = ${norm}`,
+      )
+    );
   }
 
   async findAllLiquorByCode(code: string): Promise<LiquorRecord[]> {
     const norm = normalizeUpc(code);
     if (!norm || norm === '0') return [];
-    return Array.from(this.liquorMap.values()).filter(r =>
-      normalizeUpc(r.liquorCode) === norm
+    return this.db.select().from(liquorRecords).where(
+      sql`ltrim(${liquorRecords.liquorCode}, '0') = ${norm}`
     );
   }
 
   async getLiquorRecordCount(): Promise<number> {
-    return this.liquorMap.size;
+    const r = await this.db.select({ count: sql<number>`count(*)` }).from(liquorRecords);
+    return Number(r[0]?.count ?? 0);
+  }
+
+  async searchLiquorRecords(query: string, limit = 10): Promise<{ results: LiquorRecord[], totalFound: number }> {
+    if (query.length < 2) return { results: [], totalFound: 0 };
+    const q = `%${query}%`;
+    const norm = normalizeUpc(query);
+    const results = await this.db.select().from(liquorRecords).where(
+      or(
+        ilike(liquorRecords.liquorCode, q),
+        ilike(liquorRecords.brandName, q),
+        ilike(liquorRecords.upcCode1, q),
+        ilike(liquorRecords.upcCode2, q),
+        ilike(liquorRecords.vendorName, q),
+        norm ? sql`ltrim(${liquorRecords.upcCode1}, '0') = ${norm}` : sql`false`,
+        norm ? sql`ltrim(${liquorRecords.upcCode2}, '0') = ${norm}` : sql`false`,
+      )
+    ).limit(limit);
+    return { results, totalFound: results.length };
   }
 
   // ── Scanned items (database) ───────────────────────────────────────────────
+
   async addScannedItem(insertItem: InsertScannedItem): Promise<ScannedItem> {
-    const id = randomUUID();
-    const result = await this.db.insert(scannedItems).values({ ...insertItem, id }).returning();
+    const result = await this.db.insert(scannedItems).values(insertItem).returning();
     return result[0];
   }
 
@@ -168,28 +182,18 @@ export class DatabaseStorage implements IStorage {
   }
 
   async updateScannedItemPrice(itemId: string, newPrice: number): Promise<boolean> {
-    // Price override is stored by swapping to a modified in-memory liquor record id.
-    // Retrieve the scanned item first to find its current liquor record.
-    const rows = await this.db.select().from(scannedItems).where(eq(scannedItems.id, itemId)).limit(1);
-    if (!rows[0] || !rows[0].liquorRecordId) return false;
-
-    const liquorRecord = this.liquorMap.get(rows[0].liquorRecordId);
-    if (!liquorRecord) return false;
-
-    // Clone the record in memory with the new price and point the scanned item at it
-    const newId = randomUUID();
-    this.liquorMap.set(newId, { ...liquorRecord, id: newId, shelfPrice: newPrice });
-    await this.db.update(scannedItems).set({ liquorRecordId: newId }).where(eq(scannedItems.id, itemId));
-    return true;
+    const r = await this.db.update(scannedItems)
+      .set({ overridePrice: newPrice })
+      .where(eq(scannedItems.id, itemId))
+      .returning();
+    return r.length > 0;
   }
 
   // ── Sessions (database) ────────────────────────────────────────────────────
+
   async createSession(insertSession: InsertSession): Promise<Session> {
-    const id = randomUUID();
-    // Deactivate all others, then insert new active session
     await this.db.update(sessions).set({ isActive: 0 });
     const result = await this.db.insert(sessions).values({
-      id,
       name: insertSession.name,
       itemCount: insertSession.itemCount ?? 0,
       isActive: 1,
@@ -234,9 +238,9 @@ export class DatabaseStorage implements IStorage {
   }
 
   // ── Custom name mappings (database) ────────────────────────────────────────
+
   async addCustomNameMapping(insertMapping: InsertCustomNameMapping): Promise<CustomNameMapping> {
-    const id = randomUUID();
-    const r = await this.db.insert(customNameMappings).values({ ...insertMapping, id }).returning();
+    const r = await this.db.insert(customNameMappings).values(insertMapping).returning();
     return r[0];
   }
 
@@ -264,10 +268,10 @@ export class DatabaseStorage implements IStorage {
 
 export class MemStorage implements IStorage {
   private users = new Map<string, User>();
-  private liquorRecords = new Map<string, LiquorRecord>();
-  private scannedItems = new Map<string, ScannedItem>();
-  private sessions = new Map<string, Session>();
-  private customNameMappings = new Map<string, CustomNameMapping>();
+  private liquorRecordsMap = new Map<string, LiquorRecord>();
+  private scannedItemsMap = new Map<string, ScannedItem>();
+  private sessionsMap = new Map<string, Session>();
+  private customNameMappingsMap = new Map<string, CustomNameMapping>();
   private activeSessionId: string | null = null;
 
   async getUser(id: string): Promise<User | undefined> { return this.users.get(id); }
@@ -298,7 +302,7 @@ export class MemStorage implements IStorage {
       upcCode2: insertRecord.upcCode2 ?? null,
       effectiveDate: insertRecord.effectiveDate ?? null,
     };
-    this.liquorRecords.set(id, record);
+    this.liquorRecordsMap.set(id, record);
     return record;
   }
 
@@ -306,8 +310,9 @@ export class MemStorage implements IStorage {
     for (const r of records) await this.createLiquorRecord(r);
   }
 
-  async getLiquorRecords(): Promise<LiquorRecord[]> { return Array.from(this.liquorRecords.values()); }
-  async clearLiquorRecords(): Promise<void> { this.liquorRecords.clear(); }
+  async getLiquorRecords(): Promise<LiquorRecord[]> { return Array.from(this.liquorRecordsMap.values()); }
+  async getLiquorRecordById(id: string): Promise<LiquorRecord | undefined> { return this.liquorRecordsMap.get(id); }
+  async clearLiquorRecords(): Promise<void> { this.liquorRecordsMap.clear(); }
 
   async findLiquorByBarcode(barcode: string): Promise<LiquorRecord | undefined> {
     return (await this.findAllLiquorByBarcode(barcode))[0];
@@ -315,7 +320,7 @@ export class MemStorage implements IStorage {
 
   async findAllLiquorByBarcode(barcode: string): Promise<LiquorRecord[]> {
     const norm = normalizeUpc(barcode);
-    return Array.from(this.liquorRecords.values()).filter(r => {
+    return Array.from(this.liquorRecordsMap.values()).filter(r => {
       if (r.upcCode1 === barcode || r.upcCode2 === barcode) return true;
       return normalizeUpc(r.upcCode1) === norm || normalizeUpc(r.upcCode2) === norm;
     });
@@ -324,10 +329,24 @@ export class MemStorage implements IStorage {
   async findAllLiquorByCode(code: string): Promise<LiquorRecord[]> {
     const norm = normalizeUpc(code);
     if (!norm || norm === '0') return [];
-    return Array.from(this.liquorRecords.values()).filter(r => normalizeUpc(r.liquorCode) === norm);
+    return Array.from(this.liquorRecordsMap.values()).filter(r => normalizeUpc(r.liquorCode) === norm);
   }
 
-  async getLiquorRecordCount(): Promise<number> { return this.liquorRecords.size; }
+  async getLiquorRecordCount(): Promise<number> { return this.liquorRecordsMap.size; }
+
+  async searchLiquorRecords(query: string, limit = 10): Promise<{ results: LiquorRecord[], totalFound: number }> {
+    const q = query.toLowerCase().trim();
+    const norm = normalizeUpc(q);
+    const all = Array.from(this.liquorRecordsMap.values()).filter(r => {
+      if (r.liquorCode?.toLowerCase().includes(q)) return true;
+      if (r.brandName?.toLowerCase().includes(q)) return true;
+      if (r.upcCode1?.includes(q) || normalizeUpc(r.upcCode1) === norm) return true;
+      if (r.upcCode2?.includes(q) || normalizeUpc(r.upcCode2) === norm) return true;
+      if (r.vendorName?.toLowerCase().includes(q)) return true;
+      return false;
+    });
+    return { results: all.slice(0, limit), totalFound: all.length };
+  }
 
   async addScannedItem(insertItem: InsertScannedItem): Promise<ScannedItem> {
     const id = randomUUID();
@@ -338,30 +357,27 @@ export class MemStorage implements IStorage {
       scannedBarcode: insertItem.scannedBarcode,
       scannedAt: insertItem.scannedAt,
       quantity: insertItem.quantity ?? 1,
+      overridePrice: insertItem.overridePrice ?? null,
     };
-    this.scannedItems.set(id, item);
+    this.scannedItemsMap.set(id, item);
     return item;
   }
 
   async getScannedItems(sessionId: string): Promise<ScannedItem[]> {
-    return Array.from(this.scannedItems.values()).filter(i => i.sessionId === sessionId);
+    return Array.from(this.scannedItemsMap.values()).filter(i => i.sessionId === sessionId);
   }
 
   async clearScannedItems(sessionId: string): Promise<void> {
-    for (const [id, item] of this.scannedItems)
-      if (item.sessionId === sessionId) this.scannedItems.delete(id);
+    for (const [id, item] of this.scannedItemsMap)
+      if (item.sessionId === sessionId) this.scannedItemsMap.delete(id);
   }
 
-  async deleteScannedItem(itemId: string): Promise<boolean> { return this.scannedItems.delete(itemId); }
+  async deleteScannedItem(itemId: string): Promise<boolean> { return this.scannedItemsMap.delete(itemId); }
 
   async updateScannedItemPrice(itemId: string, newPrice: number): Promise<boolean> {
-    const item = this.scannedItems.get(itemId);
+    const item = this.scannedItemsMap.get(itemId);
     if (!item) return false;
-    const rec = item.liquorRecordId ? this.liquorRecords.get(item.liquorRecordId) : null;
-    if (!rec) return false;
-    const newId = randomUUID();
-    this.liquorRecords.set(newId, { ...rec, id: newId, shelfPrice: newPrice });
-    this.scannedItems.set(itemId, { ...item, liquorRecordId: newId });
+    this.scannedItemsMap.set(itemId, { ...item, overridePrice: newPrice });
     return true;
   }
 
@@ -373,37 +389,37 @@ export class MemStorage implements IStorage {
       itemCount: insertSession.itemCount ?? 0,
       isActive: insertSession.isActive ?? 1,
     };
-    this.sessions.set(id, session);
+    this.sessionsMap.set(id, session);
     this.activeSessionId = id;
     return session;
   }
 
-  async getSession(sessionId: string): Promise<Session | undefined> { return this.sessions.get(sessionId); }
+  async getSession(sessionId: string): Promise<Session | undefined> { return this.sessionsMap.get(sessionId); }
 
   async getSessions(): Promise<Session[]> {
-    return Array.from(this.sessions.values()).sort((a, b) =>
+    return Array.from(this.sessionsMap.values()).sort((a, b) =>
       new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
     );
   }
 
   async updateSessionItemCount(sessionId: string, count: number): Promise<void> {
-    const s = this.sessions.get(sessionId);
+    const s = this.sessionsMap.get(sessionId);
     if (s) { s.itemCount = count; s.updatedAt = new Date(); }
   }
 
   async deleteSession(sessionId: string): Promise<boolean> {
-    const deleted = this.sessions.delete(sessionId);
+    const deleted = this.sessionsMap.delete(sessionId);
     if (deleted && this.activeSessionId === sessionId) this.activeSessionId = null;
     await this.clearScannedItems(sessionId);
     return deleted;
   }
 
   async getActiveSession(): Promise<Session | undefined> {
-    return this.activeSessionId ? this.sessions.get(this.activeSessionId) : undefined;
+    return this.activeSessionId ? this.sessionsMap.get(this.activeSessionId) : undefined;
   }
 
   async setActiveSession(sessionId: string): Promise<void> {
-    if (this.sessions.has(sessionId)) this.activeSessionId = sessionId;
+    if (this.sessionsMap.has(sessionId)) this.activeSessionId = sessionId;
   }
 
   async addCustomNameMapping(insertMapping: InsertCustomNameMapping): Promise<CustomNameMapping> {
@@ -412,25 +428,26 @@ export class MemStorage implements IStorage {
       id, upcCode: insertMapping.upcCode,
       customName: insertMapping.customName, uploadedAt: new Date(),
     };
-    this.customNameMappings.set(id, mapping);
+    this.customNameMappingsMap.set(id, mapping);
     return mapping;
   }
 
   async getCustomNameMappings(): Promise<CustomNameMapping[]> {
-    return Array.from(this.customNameMappings.values());
+    return Array.from(this.customNameMappingsMap.values());
   }
 
-  async clearCustomNameMappings(): Promise<void> { this.customNameMappings.clear(); }
+  async clearCustomNameMappings(): Promise<void> { this.customNameMappingsMap.clear(); }
 
   async getCustomNameByUpc(upcCode: string): Promise<string | undefined> {
     const norm = normalizeUpc(upcCode);
-    for (const m of this.customNameMappings.values())
+    for (const m of this.customNameMappingsMap.values())
       if (m.upcCode === upcCode || normalizeUpc(m.upcCode) === norm) return m.customName;
     return undefined;
   }
 }
 
-// Use DatabaseStorage when DATABASE_URL is set, otherwise fall back to memory
+// ── Singleton for the Express dev server ──────────────────────────────────────
+// In Cloudflare Pages, each request creates its own DatabaseStorage instance.
 export const storage: IStorage = process.env.DATABASE_URL
-  ? new DatabaseStorage()
+  ? new DatabaseStorage(process.env.DATABASE_URL)
   : new MemStorage();
