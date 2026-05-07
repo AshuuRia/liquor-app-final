@@ -452,6 +452,14 @@ export default function SessionPage() {
 
   useEffect(() => { if (sessionId) fetchItems(); }, [sessionId]);
 
+  // Auto-save to device whenever items change
+  useEffect(() => {
+    if (sessionId && items.length > 0) {
+      saveToLocal(items, sessionId);
+      setLastSaved(new Date().toISOString());
+    }
+  }, [items, sessionId]);
+
   const createSession = async () => {
     try {
       const r = await fetch("/api/sessions", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: `Session ${new Date().toLocaleDateString()}` }) });
