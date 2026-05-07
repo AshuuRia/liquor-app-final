@@ -7,7 +7,8 @@ import { scanImageData, setModuleArgs } from "@undecaf/zbar-wasm";
 import zbarWasmUrl from "@undecaf/zbar-wasm/dist/zbar.wasm?url";
 import {
   Camera, CameraOff, Search, X, Trash2, Download, FileText,
-  Package, AlertTriangle, RotateCcw, ChevronDown, ChevronUp, Edit3, Check
+  Package, AlertTriangle, RotateCcw, ChevronDown, ChevronUp, Edit3, Check,
+  HardDrive, RotateCw
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -17,6 +18,40 @@ import type { LiquorRecord } from "@shared/schema";
 setModuleArgs({ locateFile: () => zbarWasmUrl });
 
 const hasBarcodeDetector = typeof window !== "undefined" && "BarcodeDetector" in window;
+
+// ── Local browser storage ─────────────────────────────────────────────────────
+const LS_KEY = "liquor_session_backup";
+
+interface LocalBackup {
+  items: ScannedItem[];
+  savedAt: string;
+  sessionId: string;
+}
+
+function saveToLocal(items: ScannedItem[], sessionId: string) {
+  try {
+    const backup: LocalBackup = { items, savedAt: new Date().toISOString(), sessionId };
+    localStorage.setItem(LS_KEY, JSON.stringify(backup));
+  } catch { /* storage full or unavailable */ }
+}
+
+function loadFromLocal(): LocalBackup | null {
+  try {
+    const raw = localStorage.getItem(LS_KEY);
+    return raw ? (JSON.parse(raw) as LocalBackup) : null;
+  } catch { return null; }
+}
+
+function clearLocal() {
+  try { localStorage.removeItem(LS_KEY); } catch { /* ignore */ }
+}
+
+function fmtSavedAt(iso: string) {
+  try {
+    const d = new Date(iso);
+    return d.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+  } catch { return iso; }
+}
 const CONFIRM_FRAMES = 3;
 const SCAN_COOLDOWN_MS = 1500;
 
@@ -402,6 +437,9 @@ export default function SessionPage() {
   const [searchResults, setSearchResults] = useState<LiquorRecord[]>([]);
   const [showSearch, setShowSearch]   = useState(false);
   const [loading, setLoading] = useState(false);
+  const [showClearConfirm, setShowClearConfirm] = useState(false);
+  const [lastSaved, setLastSaved]     = useState<string | null>(null);
+  const [restorePrompt, setRestorePrompt] = useState<LocalBackup | null>(null);
   const searchDebounce = useRef<ReturnType<typeof setTimeout>>();
 
   const { data: activeData } = useQuery({ queryKey: ["/api/sessions/active"] });
@@ -422,10 +460,23 @@ export default function SessionPage() {
     } catch { /* ignore */ }
   };
 
-  const fetchItems = async () => {
-    if (!sessionId) return;
+  const fetchItems = async (sid?: string) => {
+    const id = sid ?? sessionId;
+    if (!id) return;
     setLoading(true);
-    try { const r = await fetch(`/api/scanned-items/${sessionId}`); const d = await r.json(); setItems(d.items || []); }
+    try {
+      const r = await fetch(`/api/scanned-items/${id}`);
+      const d = await r.json();
+      const fetched: ScannedItem[] = d.items || [];
+      setItems(fetched);
+      // If server session is empty, check if we have a local backup to offer
+      if (fetched.length === 0) {
+        const backup = loadFromLocal();
+        if (backup && backup.items.length > 0) {
+          setRestorePrompt(backup);
+        }
+      }
+    }
     catch { /* ignore */ } finally { setLoading(false); }
   };
 
@@ -465,10 +516,27 @@ export default function SessionPage() {
   };
 
   const clearAll = async () => {
-    if (!window.confirm("Clear all scanned items?")) return;
     await fetch(`/api/scanned-items/${sessionId}`, { method: "DELETE" });
     setItems([]);
-    toast({ title: "Cleared" });
+    clearLocal();
+    setLastSaved(null);
+    setShowClearConfirm(false);
+    toast({ title: "Session cleared" });
+  };
+
+  const saveNow = () => {
+    if (!sessionId || items.length === 0) return;
+    saveToLocal(items, sessionId);
+    const ts = new Date().toISOString();
+    setLastSaved(ts);
+    toast({ title: "Saved to this device", description: `${items.length} item${items.length !== 1 ? "s" : ""} backed up locally` });
+  };
+
+  const restoreFromLocal = (backup: LocalBackup) => {
+    setItems(backup.items);
+    setLastSaved(backup.savedAt);
+    setRestorePrompt(null);
+    toast({ title: "Session restored", description: `${backup.items.length} items loaded from local backup` });
   };
 
   const exportPTouch = () => {
@@ -497,31 +565,43 @@ export default function SessionPage() {
   }, [searchQuery, showSearch]);
 
   return (
-    <div className="flex flex-col bg-zinc-50 dark:bg-zinc-950"
+    <div className="flex flex-col bg-zinc-950"
          style={{ height: "calc(100vh - 4rem)", paddingTop: "env(safe-area-inset-top)" }}>
 
       {/* Header */}
-      <div className="bg-white dark:bg-zinc-900 px-4 pt-4 pb-3 shadow-sm flex-shrink-0">
+      <div className="bg-zinc-900 px-4 pt-4 pb-3 shadow-sm flex-shrink-0">
         <div className="flex items-center justify-between mb-3">
           <div>
-            <h1 className="text-xl font-bold text-zinc-900 dark:text-zinc-100">Session</h1>
+            <h1 className="text-xl font-bold text-zinc-100">Session</h1>
             <p className="text-xs text-zinc-500">{items.length} item{items.length !== 1 ? "s" : ""} scanned</p>
           </div>
           <div className="flex gap-2">
             <button onClick={() => setShowSearch(v => !v)}
-              className={`w-9 h-9 rounded-full flex items-center justify-center ${showSearch ? "bg-blue-100 dark:bg-blue-900/40" : "bg-zinc-100 dark:bg-zinc-800"}`}
+              className={`w-9 h-9 rounded-full flex items-center justify-center ${showSearch ? "bg-blue-900/40" : "bg-zinc-800"}`}
               data-testid="button-session-search">
-              <Search className={`h-4 w-4 ${showSearch ? "text-blue-600" : "text-zinc-500"}`} />
+              <Search className={`h-4 w-4 ${showSearch ? "text-blue-400" : "text-zinc-500"}`} />
             </button>
             {items.length > 0 && (
-              <button onClick={exportPTouch}
-                className="w-9 h-9 rounded-full bg-zinc-100 dark:bg-zinc-800 flex items-center justify-center"
-                data-testid="button-export-ptouch">
-                <Download className="h-4 w-4 text-zinc-500" />
-              </button>
+              <>
+                <button onClick={saveNow}
+                  className="w-9 h-9 rounded-full bg-zinc-800 flex items-center justify-center"
+                  data-testid="button-save-local" title="Save to this device">
+                  <HardDrive className="h-4 w-4 text-zinc-400" />
+                </button>
+                <button onClick={exportPTouch}
+                  className="w-9 h-9 rounded-full bg-zinc-800 flex items-center justify-center"
+                  data-testid="button-export-ptouch">
+                  <Download className="h-4 w-4 text-zinc-500" />
+                </button>
+              </>
             )}
           </div>
         </div>
+        {lastSaved && (
+          <p className="text-[10px] text-zinc-600 -mt-1 mb-2">
+            Backed up locally · {fmtSavedAt(lastSaved)}
+          </p>
+        )}
 
         {/* Search bar */}
         {showSearch && (
@@ -561,22 +641,49 @@ export default function SessionPage() {
 
       {/* Scanner */}
       {scannerOpen && (
-        <div className="bg-white dark:bg-zinc-900 py-4 border-b border-zinc-200 dark:border-zinc-800 flex-shrink-0">
+        <div className="bg-zinc-900 py-4 border-b border-zinc-800 flex-shrink-0">
           <ScannerView onScan={handleScan} onClose={() => setScannerOpen(false)} />
         </div>
       )}
 
       {/* Items list */}
       <div className="flex-1 overflow-y-auto px-4 py-3 space-y-2">
+
+        {/* Restore prompt banner */}
+        {restorePrompt && items.length === 0 && (
+          <div className="bg-blue-950 border border-blue-700 rounded-xl p-4 flex items-start gap-3">
+            <HardDrive className="h-5 w-5 text-blue-400 flex-shrink-0 mt-0.5" />
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-semibold text-blue-200">Local backup found</p>
+              <p className="text-xs text-blue-400 mt-0.5">
+                {restorePrompt.items.length} items · saved {fmtSavedAt(restorePrompt.savedAt)}
+              </p>
+              <div className="flex gap-2 mt-3">
+                <button
+                  onClick={() => restoreFromLocal(restorePrompt)}
+                  className="flex-1 py-2 bg-blue-600 text-white text-xs font-semibold rounded-lg flex items-center justify-center gap-1.5"
+                  data-testid="button-restore-local">
+                  <RotateCw className="h-3.5 w-3.5" /> Restore
+                </button>
+                <button
+                  onClick={() => { setRestorePrompt(null); clearLocal(); }}
+                  className="flex-1 py-2 bg-zinc-800 text-zinc-400 text-xs font-semibold rounded-lg">
+                  Dismiss
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {loading && (
           <div className="flex justify-center py-8">
             <div className="h-6 w-6 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
           </div>
         )}
 
-        {!loading && items.length === 0 && (
+        {!loading && items.length === 0 && !restorePrompt && (
           <div className="flex flex-col items-center justify-center py-16">
-            <Package className="h-12 w-12 text-zinc-300 dark:text-zinc-700 mb-3" />
+            <Package className="h-12 w-12 text-zinc-700 mb-3" />
             <p className="text-zinc-500 font-medium">No items scanned yet</p>
             <p className="text-zinc-400 text-sm mt-1">Tap "Start Scanner" or search to add items</p>
           </div>
@@ -589,8 +696,10 @@ export default function SessionPage() {
         ))}
 
         {items.length > 0 && (
-          <button onClick={clearAll}
-            className="w-full py-3 rounded-xl border border-red-200 dark:border-red-900 text-red-500 text-sm font-medium flex items-center justify-center gap-2 mt-2">
+          <button
+            onClick={() => setShowClearConfirm(true)}
+            className="w-full py-3 rounded-xl border border-red-900/60 text-red-500 text-sm font-medium flex items-center justify-center gap-2 mt-2"
+            data-testid="button-clear-all">
             <Trash2 className="h-4 w-4" /> Clear All Items
           </button>
         )}
@@ -601,6 +710,57 @@ export default function SessionPage() {
         <PickerSheet choices={pickerChoices} barcode={pickerBarcode}
           onPick={rec => { addItem(rec, pickerBarcode); setPickerOpen(false); }}
           onClose={() => setPickerOpen(false)} />
+      )}
+
+      {/* Clear all confirmation sheet */}
+      {showClearConfirm && (
+        <div className="fixed inset-0 z-50 flex items-end bg-black/60" onClick={() => setShowClearConfirm(false)}>
+          <div
+            className="w-full bg-zinc-900 rounded-t-2xl shadow-2xl animate-slide-up"
+            style={{ paddingBottom: "calc(env(safe-area-inset-bottom) + 4rem)" }}
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="flex justify-center pt-3 pb-1">
+              <div className="w-10 h-1 rounded-full bg-zinc-700" />
+            </div>
+            <div className="px-5 py-4">
+              <div className="flex items-center gap-3 mb-1">
+                <div className="w-10 h-10 rounded-full bg-red-900/40 flex items-center justify-center">
+                  <Trash2 className="h-5 w-5 text-red-400" />
+                </div>
+                <div>
+                  <h3 className="font-semibold text-zinc-100">Clear all items?</h3>
+                  <p className="text-sm text-zinc-500">
+                    This will remove all {items.length} item{items.length !== 1 ? "s" : ""} from the session
+                  </p>
+                </div>
+              </div>
+
+              {lastSaved && (
+                <div className="mt-3 bg-zinc-800 rounded-xl p-3 flex items-center gap-2">
+                  <HardDrive className="h-4 w-4 text-zinc-500 flex-shrink-0" />
+                  <p className="text-xs text-zinc-400">
+                    Local backup exists from {fmtSavedAt(lastSaved)} — it will also be deleted
+                  </p>
+                </div>
+              )}
+
+              <div className="flex gap-3 mt-5">
+                <button
+                  onClick={() => setShowClearConfirm(false)}
+                  className="flex-1 py-3 rounded-xl bg-zinc-800 text-zinc-300 font-semibold text-sm">
+                  Cancel
+                </button>
+                <button
+                  onClick={clearAll}
+                  className="flex-1 py-3 rounded-xl bg-red-600 text-white font-semibold text-sm"
+                  data-testid="button-confirm-clear">
+                  Clear All
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
