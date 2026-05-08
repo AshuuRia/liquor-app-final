@@ -14,6 +14,7 @@ import {
   Cloud, CloudOff, Save
 } from "lucide-react";
 import type { LiquorRecord } from "@shared/schema";
+import { getAuthHeaders } from "@/lib/queryClient";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -90,7 +91,11 @@ function normalizeBarcode(raw: string): string {
 
 async function loadCloudSession(): Promise<{ fileName: string; rows: ComparisonRow[] } | null> {
   try {
-    const res = await fetch("/api/price-compare/session", { credentials: "include" });
+    const authHeaders = await getAuthHeaders();
+    const res = await fetch("/api/price-compare/session", {
+      credentials: "include",
+      headers: authHeaders,
+    });
     if (!res.ok) return null;
     const data = await res.json();
     if (!data.session?.rowsJson) return null;
@@ -102,9 +107,10 @@ async function loadCloudSession(): Promise<{ fileName: string; rows: ComparisonR
 }
 
 async function saveCloudSession(fileName: string, rows: ComparisonRow[]): Promise<void> {
+  const authHeaders = await getAuthHeaders();
   await fetch("/api/price-compare/session", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...authHeaders },
     credentials: "include",
     body: JSON.stringify({ fileName, rowsJson: JSON.stringify(rows) }),
   });
@@ -183,9 +189,10 @@ export default function PriceComparePage() {
     setLoading(true);
     try {
       const csvText = await file.text();
+      const authHeaders = await getAuthHeaders();
       const res = await fetch("/api/compare-prices", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...authHeaders },
         credentials: "include",
         body: JSON.stringify({ csvText }),
       });

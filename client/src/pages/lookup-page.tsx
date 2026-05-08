@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from "react";
+import { getAuthHeaders } from "@/lib/queryClient";
 import { BrowserMultiFormatReader } from "@zxing/browser";
 import { DecodeHintType } from "@zxing/library";
 import { scanImageData, setModuleArgs } from "@undecaf/zbar-wasm";
@@ -212,9 +213,10 @@ export default function LookupPage() {
 
     setIsLooking(true);
     try {
+      const authHeaders = await getAuthHeaders();
       const res  = await fetch("/api/scan-barcode", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...authHeaders },
         body: JSON.stringify({ barcode: code, sessionId: null }),
       });
       const data = await res.json();

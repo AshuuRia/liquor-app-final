@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
+import { getAuthHeaders } from "@/lib/queryClient";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { BrowserMultiFormatReader } from "@zxing/browser";
 import { DecodeHintType } from "@zxing/library";
@@ -306,8 +307,9 @@ function ItemCard({ item, sessionId, onDelete, onPriceUpdate }: {
     const n = parseFloat(priceVal);
     if (isNaN(n) || n < 0) return;
     try {
+      const authHeaders = await getAuthHeaders();
       const r = await fetch("/api/update-item-price", {
-        method: "PATCH", headers: { "Content-Type": "application/json" },
+        method: "PATCH", headers: { "Content-Type": "application/json", ...authHeaders },
         body: JSON.stringify({ sessionId, itemId: item.id, newPrice: n }),
       });
       if (r.ok) { onPriceUpdate(n); setEditing(false); toast({ title: "Price updated", description: fmt(n) }); }
@@ -462,7 +464,8 @@ export default function SessionPage() {
 
   const createSession = async () => {
     try {
-      const r = await fetch("/api/sessions", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: `Session ${new Date().toLocaleDateString()}` }) });
+      const authHeaders = await getAuthHeaders();
+      const r = await fetch("/api/sessions", { method: "POST", headers: { "Content-Type": "application/json", ...authHeaders }, body: JSON.stringify({ name: `Session ${new Date().toLocaleDateString()}` }) });
       const d = await r.json();
       if (d.success) { setSessionId(d.session.id); qc.invalidateQueries({ queryKey: ["/api/sessions"] }); }
     } catch { /* ignore */ }
@@ -473,7 +476,8 @@ export default function SessionPage() {
     if (!id) return;
     setLoading(true);
     try {
-      const r = await fetch(`/api/scanned-items/${id}`);
+      const authHeaders = await getAuthHeaders();
+      const r = await fetch(`/api/scanned-items/${id}`, { headers: authHeaders });
       const d = await r.json();
       const fetched: ScannedItem[] = d.items || [];
       setItems(fetched);
@@ -492,7 +496,8 @@ export default function SessionPage() {
     const barcode = normalizeBarcode(raw);
     setScannerOpen(false);
     try {
-      const r = await fetch("/api/scan-barcode", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ barcode, sessionId }) });
+      const authHeaders = await getAuthHeaders();
+      const r = await fetch("/api/scan-barcode", { method: "POST", headers: { "Content-Type": "application/json", ...authHeaders }, body: JSON.stringify({ barcode, sessionId }) });
       const d = await r.json();
       if (d.success && d.requiresSelection) {
         vibrate([60, 30, 60]); playBeep(true);
@@ -510,7 +515,8 @@ export default function SessionPage() {
 
   const addItem = async (rec: LiquorRecord, barcode: string) => {
     try {
-      const r = await fetch("/api/add-item", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ liquorRecordId: rec.id, sessionId, scannedBarcode: barcode }) });
+      const authHeaders = await getAuthHeaders();
+      const r = await fetch("/api/add-item", { method: "POST", headers: { "Content-Type": "application/json", ...authHeaders }, body: JSON.stringify({ liquorRecordId: rec.id, sessionId, scannedBarcode: barcode }) });
       const d = await r.json();
       if (d.success) { toast({ title: rec.brandName, description: fmt(rec.shelfPrice) }); fetchItems(); }
     } catch { /* ignore */ }
@@ -518,13 +524,15 @@ export default function SessionPage() {
 
   const deleteItem = async (itemId: string) => {
     try {
-      await fetch(`/api/scanned-items/${sessionId}/${itemId}`, { method: "DELETE" });
+      const authHeaders = await getAuthHeaders();
+      await fetch(`/api/scanned-items/${sessionId}/${itemId}`, { method: "DELETE", headers: authHeaders });
       setItems(p => p.filter(i => i.id !== itemId));
     } catch { /* ignore */ }
   };
 
   const clearAll = async () => {
-    await fetch(`/api/scanned-items/${sessionId}`, { method: "DELETE" });
+    const authHeaders = await getAuthHeaders();
+    await fetch(`/api/scanned-items/${sessionId}`, { method: "DELETE", headers: authHeaders });
     setItems([]);
     clearLocal();
     setLastSaved(null);

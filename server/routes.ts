@@ -436,6 +436,44 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  app.get("/api/custom-names", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = getUserId(req);
+      const mappings = await storage.getCustomNameMappings(userId);
+      res.json({ success: true, count: mappings.length, mappings });
+    } catch (error) {
+      res.status(500).json({ success: false, error: "Failed to get custom name mappings" });
+    }
+  });
+
+  app.delete("/api/clear-custom-names", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = getUserId(req);
+      await storage.clearCustomNameMappings(userId);
+      res.json({ success: true, message: "Custom name mappings cleared" });
+    } catch (error) {
+      res.status(500).json({ success: false, error: "Failed to clear custom name mappings" });
+    }
+  });
+
+  app.post("/api/generate-excel", isAuthenticated, async (req: any, res) => {
+    try {
+      const { records, filename } = req.body;
+      if (!Array.isArray(records) || records.length === 0) {
+        return res.status(400).json({ success: false, error: "No records provided" });
+      }
+      const ws = XLSX.utils.json_to_sheet(records);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "Scanned Items");
+      const buffer = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
+      res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+      res.setHeader("Content-Disposition", `attachment; filename="${filename || "export.xlsx"}"`);
+      res.send(buffer);
+    } catch (error) {
+      res.status(500).json({ success: false, error: "Failed to generate Excel file" });
+    }
+  });
+
   // ── Add item directly ─────────────────────────────────────────────────────────
 
   app.post("/api/add-item", isAuthenticated, async (req: any, res) => {

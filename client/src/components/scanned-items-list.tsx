@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Download, Trash2, Package, FileText, Edit3, Upload } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { getAuthHeaders } from "@/lib/queryClient";
 
 interface ScannedItem {
   id: string;
@@ -52,7 +53,8 @@ export function ScannedItemsList({ sessionId, refreshTrigger }: ScannedItemsList
   const fetchScannedItems = async () => {
     try {
       setIsLoading(true);
-      const response = await fetch(`/api/scanned-items/${sessionId}`);
+      const authHeaders = await getAuthHeaders();
+      const response = await fetch(`/api/scanned-items/${sessionId}`, { headers: authHeaders });
       
       if (response.ok) {
         const result = await response.json();
@@ -69,8 +71,10 @@ export function ScannedItemsList({ sessionId, refreshTrigger }: ScannedItemsList
 
   const deleteScannedItem = async (itemId: string) => {
     try {
+      const authHeaders = await getAuthHeaders();
       const response = await fetch(`/api/scanned-items/${sessionId}/${itemId}`, {
         method: 'DELETE',
+        headers: authHeaders,
       });
 
       if (response.ok) {
@@ -94,8 +98,10 @@ export function ScannedItemsList({ sessionId, refreshTrigger }: ScannedItemsList
 
   const clearScannedItems = async () => {
     try {
+      const authHeaders = await getAuthHeaders();
       const response = await fetch(`/api/scanned-items/${sessionId}`, {
         method: 'DELETE',
+        headers: authHeaders,
       });
 
       if (response.ok) {
@@ -148,11 +154,10 @@ export function ScannedItemsList({ sessionId, refreshTrigger }: ScannedItemsList
     }
 
     try {
+      const authHeaders = await getAuthHeaders();
       const response = await fetch(`/api/update-item-price`, {
         method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json', ...authHeaders },
         body: JSON.stringify({
           sessionId,
           itemId: editingItemId,
@@ -308,7 +313,8 @@ export function ScannedItemsList({ sessionId, refreshTrigger }: ScannedItemsList
       console.log('Exporting P-touch with custom names:', scannedItems.length);
       
       // Get custom name mappings first
-      const mappingsResponse = await fetch('/api/custom-names');
+      const authHeaders = await getAuthHeaders();
+      const mappingsResponse = await fetch('/api/custom-names', { headers: authHeaders });
       let customMappings: Record<string, string> = {};
       
       if (mappingsResponse.ok) {
@@ -511,11 +517,10 @@ export function ScannedItemsList({ sessionId, refreshTrigger }: ScannedItemsList
 
       console.log('Excel data prepared:', excelData.length, 'rows');
 
+      const authHeaders2 = await getAuthHeaders();
       const response = await fetch('/api/generate-excel', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json', ...authHeaders2 },
         body: JSON.stringify({
           records: excelData,
           filename: `scanned_liquor_${new Date().toISOString().split('T')[0]}.xlsx`,
@@ -759,7 +764,8 @@ export function CustomNameMappingUpload() {
 
   const loadMappingCount = async () => {
     try {
-      const response = await fetch('/api/custom-names');
+      const authHeaders = await getAuthHeaders();
+      const response = await fetch('/api/custom-names', { headers: authHeaders });
       if (response.ok) {
         const result = await response.json();
         setMappingCount(result.count || 0);
@@ -778,17 +784,19 @@ export function CustomNameMappingUpload() {
       const formData = new FormData();
       formData.append('file', mappingFile);
 
+      const authHeaders = await getAuthHeaders();
       const response = await fetch('/api/upload-custom-names', {
         method: 'POST',
+        headers: authHeaders,
         body: formData,
       });
 
       if (response.ok) {
         const result = await response.json();
-        setMappingCount(result.mappingsUploaded || 0);
+        setMappingCount(result.mappingsAdded || result.mappingsUploaded || 0);
         toast({
           title: "Custom names uploaded successfully",
-          description: `${result.mappingsUploaded} name mappings added`,
+          description: `${result.mappingsAdded || result.mappingsUploaded || 0} name mappings added`,
         });
         setMappingFile(null);
       } else {
@@ -809,8 +817,10 @@ export function CustomNameMappingUpload() {
 
   const clearCustomNames = async () => {
     try {
+      const authHeaders = await getAuthHeaders();
       const response = await fetch('/api/clear-custom-names', {
         method: 'DELETE',
+        headers: authHeaders,
       });
 
       if (response.ok) {

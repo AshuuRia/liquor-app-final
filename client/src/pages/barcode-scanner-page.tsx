@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { getAuthHeaders } from "@/lib/queryClient";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { BarcodeScanner } from "@/components/barcode-scanner";
 import { ScannedItemsList, CustomNameMappingUpload } from "@/components/scanned-items-list";
@@ -56,10 +57,10 @@ export default function BarcodeScannerPage() {
     try {
       const now = new Date();
       const defaultName = `Scan Session ${now.toLocaleDateString()}`;
-      
+      const authHeaders = await getAuthHeaders();
       const response = await fetch('/api/sessions', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...authHeaders },
         body: JSON.stringify({ name: defaultName }),
       });
       
@@ -76,9 +77,10 @@ export default function BarcodeScannerPage() {
   const checkLiquorData = async () => {
     try {
       // Check if we have liquor records by doing a test scan
+      const authHeaders = await getAuthHeaders();
       const scanResponse = await fetch('/api/scan-barcode', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...authHeaders },
         body: JSON.stringify({ barcode: 'test-check-only', sessionId: null })
       });
       
@@ -94,11 +96,10 @@ export default function BarcodeScannerPage() {
     console.log('Manual search selected:', liquor.brandName);
     
     try {
+      const authHeaders = await getAuthHeaders();
       const response = await fetch('/api/add-item', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json', ...authHeaders },
         body: JSON.stringify({
           liquorRecordId: liquor.id,
           sessionId: sessionId || 'default',
@@ -139,9 +140,10 @@ export default function BarcodeScannerPage() {
   const confirmPickerSelection = async (product: LiquorRecord) => {
     setPickerLoading(true);
     try {
+      const authHeaders = await getAuthHeaders();
       const response = await fetch('/api/add-item', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...authHeaders },
         body: JSON.stringify({
           liquorRecordId: product.id,
           sessionId: sessionId || 'default',
@@ -185,9 +187,10 @@ export default function BarcodeScannerPage() {
     console.log('Scanned barcode — raw:', rawBarcode, '→ normalized:', barcode);
     
     try {
+      const authHeaders = await getAuthHeaders();
       const response = await fetch('/api/scan-barcode', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...authHeaders },
         body: JSON.stringify({ barcode, sessionId }),
       });
 

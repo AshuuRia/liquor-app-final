@@ -37,12 +37,8 @@ export function SessionSidebar({ onSessionChange, currentSessionId }: SessionSid
   // Create new session mutation
   const createSessionMutation = useMutation({
     mutationFn: async (name: string) => {
-      const response = await fetch('/api/sessions', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name }),
-      });
-      return response.json();
+      const res = await apiRequest('POST', '/api/sessions', { name });
+      return res.json();
     },
     onSuccess: (data: any) => {
       queryClient.invalidateQueries({ queryKey: ['/api/sessions'] });
@@ -66,10 +62,8 @@ export function SessionSidebar({ onSessionChange, currentSessionId }: SessionSid
   // Delete session mutation
   const deleteSessionMutation = useMutation({
     mutationFn: async (sessionId: string) => {
-      const response = await fetch(`/api/sessions/${sessionId}`, {
-        method: 'DELETE',
-      });
-      return response.json();
+      const res = await apiRequest('DELETE', `/api/sessions/${sessionId}`);
+      return res.json();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['/api/sessions'] });
@@ -103,10 +97,8 @@ export function SessionSidebar({ onSessionChange, currentSessionId }: SessionSid
   // Activate session mutation
   const activateSessionMutation = useMutation({
     mutationFn: async (sessionId: string) => {
-      const response = await fetch(`/api/sessions/${sessionId}/activate`, {
-        method: 'POST',
-      });
-      return response.json();
+      const res = await apiRequest('POST', `/api/sessions/${sessionId}/activate`);
+      return res.json();
     },
     onSuccess: (data: any) => {
       onSessionChange(data.session.id);

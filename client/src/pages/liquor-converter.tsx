@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { getAuthHeaders } from "@/lib/queryClient";
 import { ProgressIndicator } from "@/components/progress-indicator";
 import { SummaryStats } from "@/components/summary-stats";
 import { Card, CardContent } from "@/components/ui/card";
@@ -147,11 +148,10 @@ export default function LiquorConverter() {
     if (!processedData?.allRecords && !processedData?.records) return;
 
     try {
+      const authHeaders = await getAuthHeaders();
       const response = await fetch('/api/generate-excel', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json', ...authHeaders },
         body: JSON.stringify({
           records: processedData.allRecords || processedData.records,
           filename: 'michigan_liquor_data.txt',

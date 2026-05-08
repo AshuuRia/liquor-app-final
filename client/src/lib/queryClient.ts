@@ -8,7 +8,7 @@ async function throwIfResNotOk(res: Response) {
   }
 }
 
-async function getAuthHeaders(): Promise<Record<string, string>> {
+export async function getAuthHeaders(): Promise<Record<string, string>> {
   if (!isClerkMode()) return {};
   const token = await getClerkToken();
   return token ? { Authorization: `Bearer ${token}` } : {};
