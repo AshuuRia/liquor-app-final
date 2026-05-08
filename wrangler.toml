@@ -6,7 +6,7 @@ pages_build_output_dir = "dist/public"
 # ── Public runtime variables ──────────────────────────────────────────────────
 # Paste your Clerk publishable key (pk_live_...) here.
 [vars]
-CLERK_PUBLISHABLE_KEY = "REPLACE_WITH_YOUR_CLERK_PUBLISHABLE_KEY"
+CLERK_PUBLISHABLE_KEY = "pk_test_bW92aW5nLXdlYXNlbC03My5jbGVyay5hY2NvdW50cy5kZXYk"
 
 # ── Cloudflare D1 database binding ───────────────────────────────────────────
 # After running `npx wrangler d1 create liquor-inventory-db`, paste the
