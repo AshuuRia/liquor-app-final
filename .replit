@@ -1,9 +1,9 @@
-modules = ["nodejs-20", "web", "postgresql-16"]
+modules = ["nodejs-20", "web"]
 run = "npm run dev"
 hidden = [".config", ".git", "generated-icon.png", "node_modules", "dist"]
 
 [nix]
-channel = "stable-24_05"
+channel = "stable-25_05"
 
 [deployment]
 deploymentTarget = "autoscale"
@@ -49,4 +49,3 @@ integrations = ["javascript_log_in_with_replit:2.0.0"]
 [userenv]
 
 [userenv.shared]
-CLERK_PUBLISHABLE_KEY = "pk_test_bW92aW5nLXdlYXNlbC03My5jbGVyay5hY2NvdW50cy5kZXYk"

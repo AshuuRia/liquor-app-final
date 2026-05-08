@@ -3,7 +3,7 @@ import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import multer from "multer";
 import * as XLSX from "xlsx";
-import { isAuthenticated, fetchClerkUser } from "./clerkAuth";
+import { isAuthenticated } from "./replit_integrations/auth";
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -134,22 +134,24 @@ function parseCsvLine(line: string): string[] {
 // ── getUserId helper ───────────────────────────────────────────────────────────
 
 function getUserId(req: any): string {
-  return req.clerkUserId as string;
+  return req.user?.claims?.sub as string;
 }
 
 // ── Route registration ─────────────────────────────────────────────────────────
 
 export async function registerRoutes(app: Express): Promise<Server> {
 
-  // ── Config — tells the frontend to use Clerk ──────────────────────────────────
+  // ── Config — no Clerk key needed ─────────────────────────────────────────────
   app.get("/api/config", (_req, res) => {
-    res.json({ clerkPublishableKey: process.env.CLERK_PUBLISHABLE_KEY || null });
+    res.json({ clerkPublishableKey: null });
   });
 
-  // ── Auth user — fetches profile from Clerk API ────────────────────────────────
+  // ── Auth user — fetches profile from Replit Auth session ─────────────────────
   app.get("/api/auth/user", isAuthenticated, async (req: any, res) => {
     try {
-      const user = await fetchClerkUser(req.clerkUserId);
+      const { authStorage } = await import("./replit_integrations/auth");
+      const userId = req.user?.claims?.sub;
+      const user = await authStorage.getUser(userId);
       res.json(user);
     } catch {
       res.status(500).json({ message: "Failed to fetch user" });
