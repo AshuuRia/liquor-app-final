@@ -1,5 +1,5 @@
 import { drizzle } from 'drizzle-orm/d1';
-import { eq, or, sql, like } from 'drizzle-orm';
+import { eq, or, sql, like, and } from 'drizzle-orm';
 import * as schema from './_schema';
 
 function normalizeUpc(upc: string | null | undefined): string {
@@ -148,14 +148,19 @@ export class D1Storage {
 
   // ── Sessions ──────────────────────────────────────────────────────────────
 
-  async createSession(name: string): Promise<any> {
+  async createSession(name: string, userId?: string): Promise<any> {
     const id = crypto.randomUUID();
     const now = new Date().toISOString();
-    await this.db.update(schema.sessions).set({ isActive: 0 });
+    if (userId) {
+      await this.db.update(schema.sessions).set({ isActive: 0 })
+        .where(eq(schema.sessions.userId, userId));
+    } else {
+      await this.db.update(schema.sessions).set({ isActive: 0 });
+    }
     await this.db.insert(schema.sessions).values({
-      id, name, itemCount: 0, isActive: 1, createdAt: now, updatedAt: now,
+      id, userId: userId ?? null, name, itemCount: 0, isActive: 1, createdAt: now, updatedAt: now,
     });
-    return { id, name, itemCount: 0, isActive: 1, createdAt: now, updatedAt: now };
+    return { id, userId: userId ?? null, name, itemCount: 0, isActive: 1, createdAt: now, updatedAt: now };
   }
 
   async getSession(sessionId: string): Promise<any | undefined> {
@@ -164,7 +169,12 @@ export class D1Storage {
     return r[0];
   }
 
-  async getSessions(): Promise<any[]> {
+  async getSessions(userId?: string): Promise<any[]> {
+    if (userId) {
+      return this.db.select().from(schema.sessions)
+        .where(eq(schema.sessions.userId, userId))
+        .orderBy(sql`${schema.sessions.updatedAt} desc`);
+    }
     return this.db.select().from(schema.sessions)
       .orderBy(sql`${schema.sessions.updatedAt} desc`);
   }
@@ -184,7 +194,14 @@ export class D1Storage {
     return true;
   }
 
-  async getActiveSession(): Promise<any | undefined> {
+  async getActiveSession(userId?: string): Promise<any | undefined> {
+    if (userId) {
+      const r = await this.db.select().from(schema.sessions)
+        .where(and(eq(schema.sessions.userId, userId), eq(schema.sessions.isActive, 1)))
+        .orderBy(sql`${schema.sessions.updatedAt} desc`)
+        .limit(1);
+      return r[0];
+    }
     const r = await this.db.select().from(schema.sessions)
       .where(eq(schema.sessions.isActive, 1))
       .orderBy(sql`${schema.sessions.updatedAt} desc`)
@@ -192,8 +209,13 @@ export class D1Storage {
     return r[0];
   }
 
-  async setActiveSession(sessionId: string): Promise<void> {
-    await this.db.update(schema.sessions).set({ isActive: 0 });
+  async setActiveSession(sessionId: string, userId?: string): Promise<void> {
+    if (userId) {
+      await this.db.update(schema.sessions).set({ isActive: 0 })
+        .where(eq(schema.sessions.userId, userId));
+    } else {
+      await this.db.update(schema.sessions).set({ isActive: 0 });
+    }
     await this.db.update(schema.sessions)
       .set({ isActive: 1, updatedAt: new Date().toISOString() })
       .where(eq(schema.sessions.id, sessionId));
@@ -201,30 +223,71 @@ export class D1Storage {
 
   // ── Custom name mappings ──────────────────────────────────────────────────
 
-  async addCustomNameMapping(upcCode: string, customName: string): Promise<any> {
+  async addCustomNameMapping(upcCode: string, customName: string, userId?: string): Promise<any> {
     const id = crypto.randomUUID();
     const uploadedAt = new Date().toISOString();
     await this.db.insert(schema.customNameMappings)
-      .values({ id, upcCode, customName, uploadedAt });
-    return { id, upcCode, customName, uploadedAt };
+      .values({ id, userId: userId ?? null, upcCode, customName, uploadedAt });
+    return { id, userId: userId ?? null, upcCode, customName, uploadedAt };
   }
 
-  async getCustomNameMappings(): Promise<any[]> {
+  async getCustomNameMappings(userId?: string): Promise<any[]> {
+    if (userId) {
+      return this.db.select().from(schema.customNameMappings)
+        .where(eq(schema.customNameMappings.userId, userId));
+    }
     return this.db.select().from(schema.customNameMappings);
   }
 
-  async clearCustomNameMappings(): Promise<void> {
-    await this.db.delete(schema.customNameMappings);
+  async clearCustomNameMappings(userId?: string): Promise<void> {
+    if (userId) {
+      await this.db.delete(schema.customNameMappings)
+        .where(eq(schema.customNameMappings.userId, userId));
+    } else {
+      await this.db.delete(schema.customNameMappings);
+    }
   }
 
-  async getCustomNameByUpc(upcCode: string): Promise<string | undefined> {
+  async getCustomNameByUpc(upcCode: string, userId?: string): Promise<string | undefined> {
     const norm = normalizeUpc(upcCode);
-    const all = await this.db.select().from(schema.customNameMappings).where(
-      or(
-        eq(schema.customNameMappings.upcCode, upcCode),
-        sql`ltrim(${schema.customNameMappings.upcCode}, '0') = ${norm}`,
-      )
-    );
+    const conditions = userId
+      ? and(eq(schema.customNameMappings.userId, userId),
+          or(
+            eq(schema.customNameMappings.upcCode, upcCode),
+            sql`ltrim(${schema.customNameMappings.upcCode}, '0') = ${norm}`,
+          ))
+      : or(
+          eq(schema.customNameMappings.upcCode, upcCode),
+          sql`ltrim(${schema.customNameMappings.upcCode}, '0') = ${norm}`,
+        );
+    const all = await this.db.select().from(schema.customNameMappings).where(conditions);
     return all[0]?.customName;
+  }
+
+  // ── Price compare sessions ────────────────────────────────────────────────
+
+  async savePriceCompareSession(userId: string, fileName: string, rowsJson: string): Promise<void> {
+    const now = new Date().toISOString();
+    const existing = await this.db.select({ id: schema.priceCompareSessions.id })
+      .from(schema.priceCompareSessions)
+      .where(eq(schema.priceCompareSessions.userId, userId))
+      .limit(1);
+    if (existing.length) {
+      await this.db.update(schema.priceCompareSessions)
+        .set({ fileName, rowsJson, updatedAt: now })
+        .where(eq(schema.priceCompareSessions.userId, userId));
+    } else {
+      await this.db.insert(schema.priceCompareSessions).values({
+        id: crypto.randomUUID(), userId, fileName, rowsJson, createdAt: now, updatedAt: now,
+      });
+    }
+  }
+
+  async loadPriceCompareSession(userId: string): Promise<{ fileName: string; rows: any[] } | null> {
+    const r = await this.db.select().from(schema.priceCompareSessions)
+      .where(eq(schema.priceCompareSessions.userId, userId))
+      .limit(1);
+    if (!r.length) return null;
+    return { fileName: r[0].fileName, rows: JSON.parse(r[0].rowsJson) };
   }
 }

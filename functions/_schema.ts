@@ -30,6 +30,7 @@ export const scannedItems = sqliteTable("scanned_items", {
 
 export const sessions = sqliteTable("sessions", {
   id: text("id").primaryKey(),
+  userId: text("user_id"),
   name: text("name").notNull(),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
@@ -39,7 +40,17 @@ export const sessions = sqliteTable("sessions", {
 
 export const customNameMappings = sqliteTable("custom_name_mappings", {
   id: text("id").primaryKey(),
+  userId: text("user_id"),
   upcCode: text("upc_code").notNull(),
   customName: text("custom_name").notNull(),
   uploadedAt: text("uploaded_at").notNull(),
+});
+
+export const priceCompareSessions = sqliteTable("price_compare_sessions", {
+  id: text("id").primaryKey(),
+  userId: text("user_id").notNull(),
+  fileName: text("file_name").notNull(),
+  rowsJson: text("rows_json").notNull(),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
 });

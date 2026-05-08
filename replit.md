@@ -246,134 +246,125 @@ Note: the normal `npm run dev` command uses Express + Neon Postgres (good for ra
 
 ---
 
-## Google OAuth on Cloudflare Pages (Production Auth)
+## Deploying to Cloudflare Pages with Clerk Auth
 
-The **dev environment on Replit** uses Replit Auth (OIDC), which supports Google, GitHub, Apple, and email out of the box.
+The **dev environment** uses Replit Auth. The **production Cloudflare Pages deployment** uses Clerk (free, supports Google/GitHub/Apple/email, works natively in Cloudflare Workers).
 
-For the **Cloudflare Pages production deployment**, Replit Auth cannot be used (it requires a Replit environment). You have two good options:
-
-### Option A — Clerk (recommended, easiest)
-
-Clerk is a full authentication SaaS that works in Cloudflare Workers with zero server-side sessions.
-
-1. **Create a free Clerk account** at [clerk.com](https://clerk.com)
-2. **Create a new application** — enable Google as a social provider under Social Connections
-3. **Get your API keys** from Dashboard → API Keys:
-   - `NEXT_PUBLIC_PUBLISHABLE_KEY` (frontend)
-   - `CLERK_SECRET_KEY` (backend)
-4. **Add Clerk to the Cloudflare Pages project**:
-   - Go to your Pages project → Settings → Environment Variables
-   - Add `CLERK_SECRET_KEY` and `CLERK_PUBLISHABLE_KEY`
-5. **Install Clerk SDK** in the project:
-   ```bash
-   npm install @clerk/clerk-js @clerk/backend
-   ```
-6. **Frontend** — initialize Clerk in `client/src/main.tsx`:
-   ```typescript
-   import { Clerk } from "@clerk/clerk-js";
-   const clerk = new Clerk(import.meta.env.VITE_CLERK_PUBLISHABLE_KEY);
-   await clerk.load();
-   ```
-7. **Backend** — verify the session token in your Hono Pages Function (`functions/api/[[path]].ts`):
-   ```typescript
-   import { createClerkClient } from "@clerk/backend";
-   const clerkClient = createClerkClient({ secretKey: env.CLERK_SECRET_KEY });
-   const token = c.req.header("Authorization")?.replace("Bearer ", "");
-   const { sub: userId } = await clerkClient.verifyToken(token);
-   ```
-8. The `userId` from `sub` is stable — use it as the key for all user-scoped data in D1
+The code is already wired — you just need accounts and environment variables. Follow these steps in order.
 
 ---
 
-### Option B — Google OAuth directly (manual)
+### Part 1 — Create a Cloudflare Pages + D1 Project
 
-If you prefer no third-party auth service:
+Follow Steps 1–9 in the [Cloudflare Pages tutorial](#cloudflare-pages--d1-deployment-tutorial) above to:
+- Create the D1 database
+- Connect GitHub → Cloudflare Pages
+- Set the build command to `vite build` and output to `dist/public`
 
-1. **Create a Google OAuth app** at [console.cloud.google.com](https://console.cloud.google.com)
-   - Go to APIs & Services → Credentials → Create Credentials → OAuth 2.0 Client ID
-   - Application type: Web application
-   - Authorized redirect URIs: `https://your-project.pages.dev/api/callback`
-2. **Copy** your Client ID and Client Secret
-3. **Add to Cloudflare Pages** environment variables:
-   - `GOOGLE_CLIENT_ID`
-   - `GOOGLE_CLIENT_SECRET`
-   - `SESSION_SECRET` (any random 32+ char string)
-4. **Add KV namespace** for session storage (Cloudflare → Workers & Pages → KV → Create):
-   - Go to your Pages project → Settings → Functions → KV namespace bindings
-   - Variable name: `SESSIONS`, select your KV namespace
-5. **Implement the auth flow** in `functions/api/[[path]].ts` (Hono):
-   ```typescript
-   // GET /api/login — redirect to Google
-   app.get("/api/login", c => {
-     const url = `https://accounts.google.com/o/oauth2/v2/auth?` +
-       `client_id=${c.env.GOOGLE_CLIENT_ID}&` +
-       `redirect_uri=${encodeURIComponent("https://your-project.pages.dev/api/callback")}&` +
-       `response_type=code&scope=openid+email+profile`;
-     return c.redirect(url);
-   });
-
-   // GET /api/callback — exchange code for user info, set session cookie
-   app.get("/api/callback", async c => {
-     const code = c.req.query("code");
-     const tokenRes = await fetch("https://oauth2.googleapis.com/token", {
-       method: "POST",
-       body: new URLSearchParams({
-         code, client_id: c.env.GOOGLE_CLIENT_ID,
-         client_secret: c.env.GOOGLE_CLIENT_SECRET,
-         redirect_uri: "https://your-project.pages.dev/api/callback",
-         grant_type: "authorization_code",
-       }),
-     });
-     const { id_token } = await tokenRes.json();
-     // Decode the JWT (no verification needed — Google signed it)
-     const payload = JSON.parse(atob(id_token.split(".")[1]));
-     const userId = payload.sub;
-     // Store session in KV
-     const sessionId = crypto.randomUUID();
-     await c.env.SESSIONS.put(sessionId, JSON.stringify({ userId, email: payload.email }), { expirationTtl: 604800 });
-     return new Response(null, { status: 302, headers: {
-       Location: "/",
-       "Set-Cookie": `sid=${sessionId}; HttpOnly; Secure; SameSite=Lax; Max-Age=604800; Path=/`,
-     }});
-   });
-   ```
-6. **Middleware** — read `sid` cookie, look up session in KV, attach userId to context
-7. **Data** — use the same D1 tables (`sessions`, `price_compare_sessions`, etc.) with the `user_id` column
+**Do NOT redeploy yet** — you need Clerk set up first.
 
 ---
 
-### D1 Schema for User-Scoped Tables (prod)
+### Part 2 — Set Up Clerk
 
-Apply this migration to your D1 database after adding user auth:
+1. Go to [clerk.com](https://clerk.com) and create a free account
+2. Click **Create application**, give it a name (e.g. "Michigan Liquor")
+3. Under **Social connections**, enable **Google** (and optionally GitHub, Apple)
+4. Go to **Dashboard → API Keys** and copy:
+   - **Publishable key** — starts with `pk_live_...` (or `pk_test_...` for test mode)
+   - **Secret key** — starts with `sk_live_...`
+5. In your Clerk Dashboard → **Settings → Domains**, add your Cloudflare Pages domain:
+   - `https://your-project.pages.dev`
 
-```sql
-ALTER TABLE sessions ADD COLUMN IF NOT EXISTS user_id TEXT;
-ALTER TABLE custom_name_mappings ADD COLUMN IF NOT EXISTS user_id TEXT;
+---
 
-CREATE TABLE IF NOT EXISTS auth_users (
-  id TEXT PRIMARY KEY,
-  email TEXT UNIQUE,
-  first_name TEXT,
-  last_name TEXT,
-  profile_image_url TEXT,
-  created_at TEXT DEFAULT (datetime('now')),
-  updated_at TEXT DEFAULT (datetime('now'))
-);
+### Part 3 — Apply the D1 Migration (user-scoped tables)
 
-CREATE TABLE IF NOT EXISTS price_compare_sessions (
-  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
-  user_id TEXT NOT NULL,
-  file_name TEXT NOT NULL,
-  rows_json TEXT NOT NULL,
-  created_at TEXT DEFAULT (datetime('now')),
-  updated_at TEXT DEFAULT (datetime('now'))
-);
-```
+Run this once after creating your D1 database. It adds `user_id` to sessions and creates the price compare sessions table:
 
-Run with:
 ```bash
 npx wrangler d1 execute liquor-inventory-db --file=migrations/d1/0002_user_scoped.sql
 ```
+
+Verify it worked:
+```bash
+npx wrangler d1 execute liquor-inventory-db --command="SELECT name FROM sqlite_master WHERE type='table'"
+```
+
+You should see: `liquor_records`, `scanned_items`, `sessions`, `custom_name_mappings`, `price_compare_sessions`
+
+---
+
+### Part 4 — Add Environment Variables to Cloudflare Pages
+
+In your Cloudflare Pages project → **Settings → Environment Variables**, add:
+
+| Variable | Value |
+|---|---|
+| `VITE_CLERK_PUBLISHABLE_KEY` | `pk_live_...` (your Clerk publishable key) |
+| `CLERK_SECRET_KEY` | `sk_live_...` (your Clerk secret key) |
+
+**Important:** `VITE_CLERK_PUBLISHABLE_KEY` is a build-time variable (Vite bakes it in). Set it under **Build variables** as well as runtime variables, or it won't appear in the frontend.
+
+How to add build variables:
+- Go to Pages project → Settings → Environment Variables
+- Click **Add variable** → set both **Production** and **Preview**
+- Do this for BOTH variables
+
+---
+
+### Part 5 — Add the D1 Binding
+
+In your Cloudflare Pages project → **Settings → Functions**:
+- Scroll to **D1 database bindings**
+- Click **Add binding** → Variable name: `DB` → select `liquor-inventory-db`
+- Click **Save**
+
+---
+
+### Part 6 — Deploy
+
+Trigger a deployment:
+- Push any commit to GitHub, OR
+- Go to Pages → Deployments → click **...** on the latest → **Retry deployment**
+
+After deployment, your app at `https://your-project.pages.dev` will:
+1. Show the landing page to unauthenticated users
+2. "Sign in" opens Clerk's modal — users pick Google, GitHub, Apple, or email
+3. After sign-in, all sessions and price compare data are scoped to that user's account
+
+---
+
+### Part 7 — Load the Michigan Liquor Data
+
+Once logged in on the live site:
+1. Tap **More** tab → **Refresh Data**
+2. Wait ~10 seconds for 13,899 records to load into D1
+3. You're ready to scan
+
+Data is stored permanently in D1. Repeat when the Michigan price book updates (usually monthly).
+
+---
+
+### How the Auth Works (Technical Details)
+
+- **Frontend** (`client/src/lib/clerk.ts`): Loads Clerk JS from CDN when `VITE_CLERK_PUBLISHABLE_KEY` is set. In dev (no env var), Replit Auth is used instead. No npm package required — uses Clerk's CDN.
+- **Backend** (`functions/api/[[path]].ts`): Each protected API route requires `Authorization: Bearer <token>`. The Hono middleware fetches Clerk's JWKS, verifies the JWT signature using Web Crypto API, and extracts the `userId` from the `sub` claim. No `@clerk/backend` package needed.
+- **User data scoping**: `sessions`, `custom_name_mappings`, and `price_compare_sessions` are all filtered by `user_id` in D1.
+- **Dev vs. prod**: The same frontend codebase runs in both environments. If `VITE_CLERK_PUBLISHABLE_KEY` is set → Clerk mode. If not → Replit Auth mode.
+
+---
+
+### Free Tier Summary
+
+| Service | Free Limit |
+|---|---|
+| Cloudflare Pages | Unlimited requests, 500 builds/month |
+| Cloudflare Pages Functions | 100,000 requests/day |
+| D1 (SQLite) | 5 GB storage, 5M reads/day, 100K writes/day |
+| Clerk | 10,000 monthly active users |
+
+All free. No credit card required for any of these at the scale of a liquor store team.
 
 ## Gotchas
 
@@ -391,4 +382,7 @@ npx wrangler d1 execute liquor-inventory-db --file=migrations/d1/0002_user_scope
 - D1 storage class: `functions/_storage.ts`
 - Hono API entry: `functions/api/[[path]].ts`
 - Michigan data fetch: `POST /api/fetch-liquor-data`
-- D1 migration: `migrations/d1/0001_init.sql`
+- D1 initial migration: `migrations/d1/0001_init.sql`
+- D1 user-scoped migration: `migrations/d1/0002_user_scoped.sql`
+- Clerk loader (frontend): `client/src/lib/clerk.ts`
+- Auth hook: `client/src/hooks/use-auth.ts`
