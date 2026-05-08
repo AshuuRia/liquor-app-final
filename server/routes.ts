@@ -149,7 +149,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // ── Auth user — fetches profile from Clerk API ────────────────────────────────
   app.get("/api/auth/user", isAuthenticated, async (req: any, res) => {
     try {
-      const user = await fetchClerkUser(req.clerkUserId);
+      const user = await fetchClerkUser(req.clerkUserId, req.clerkPayload);
       res.json(user);
     } catch {
       res.status(500).json({ message: "Failed to fetch user" });
