@@ -45,3 +45,8 @@ outputType = "webview"
 stack = "FULLSTACK_JS"
 expertMode = true
 integrations = ["javascript_log_in_with_replit:2.0.0"]
+
+[userenv]
+
+[userenv.shared]
+CLERK_PUBLISHABLE_KEY = "pk_test_bW92aW5nLXdlYXNlbC03My5jbGVyay5hY2NvdW50cy5kZXYk"
