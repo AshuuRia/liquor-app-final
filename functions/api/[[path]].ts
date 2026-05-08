@@ -1,27 +1,33 @@
 import { Hono } from 'hono';
-import { DatabaseStorage } from '../../server/storage';
-import { parseTsvLine, toBottleBarcode, generateLabelHTML, normalizeUpc } from '../../server/utils';
+import { cors } from 'hono/cors';
+import { D1Storage } from '../_storage';
+import { parseTsvLine, toBottleBarcode, generateLabelHTML } from '../../server/utils';
 import * as XLSX from 'xlsx';
 
 type Env = {
   Bindings: {
-    DATABASE_URL: string;
+    DB: any; // D1Database
   };
 };
 
 const app = new Hono<Env>().basePath('/api');
 
-function getStorage(url: string) {
-  return new DatabaseStorage(url);
-}
+// CORS — allows the Pages frontend to call the API
+app.use('*', cors({
+  origin: '*',
+  allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowHeaders: ['Content-Type'],
+}));
+
+const db = (c: any) => new D1Storage(c.env.DB);
 
 // ── Michigan data helpers ─────────────────────────────────────────────────────
 
-async function processTsvContent(content: string, storage: DatabaseStorage) {
+async function processTsvContent(content: string, storage: D1Storage) {
   const allLines = content.split('\n').filter((l: string) => l.trim());
   const lines = allLines[0]?.toLowerCase().includes('liquor code') ? allLines.slice(1) : allLines;
 
-  const records = [];
+  const records: any[] = [];
   const brands = new Set<string>();
   const vendors = new Set<string>();
   const prices: number[] = [];
@@ -54,56 +60,41 @@ async function processTsvContent(content: string, storage: DatabaseStorage) {
 
 // ── Routes ────────────────────────────────────────────────────────────────────
 
-// Process file upload (TSV/text)
 app.post('/process-file', async (c) => {
-  const storage = getStorage(c.env.DATABASE_URL);
   try {
     const formData = await c.req.formData();
     const file = formData.get('file') as File | null;
     if (!file) return c.json({ success: false, error: 'No file uploaded' }, 400);
-
     const text = await file.text();
-    const result = await processTsvContent(text, storage);
-    return c.json(result);
+    return c.json(await processTsvContent(text, db(c)));
   } catch (err) {
     return c.json({ success: false, error: 'Failed to process file', details: String(err) }, 500);
   }
 });
 
-// Process file content directly (JSON body)
 app.post('/process-file-content', async (c) => {
-  const storage = getStorage(c.env.DATABASE_URL);
   try {
-    const { content } = await c.req.json<{ content: string; filename?: string }>();
-    if (!content) return c.json({ success: false, error: 'No file content provided' }, 400);
-    const result = await processTsvContent(content, storage);
-    return c.json(result);
+    const { content } = await c.req.json<{ content: string }>();
+    if (!content) return c.json({ success: false, error: 'No content provided' }, 400);
+    return c.json(await processTsvContent(content, db(c)));
   } catch (err) {
     return c.json({ success: false, error: 'Failed to process file content', details: String(err) }, 500);
   }
 });
 
-// Scan barcode
 app.post('/scan-barcode', async (c) => {
-  const storage = getStorage(c.env.DATABASE_URL);
   try {
     const { barcode, sessionId } = await c.req.json<{ barcode: string; sessionId?: string }>();
     if (!barcode) return c.json({ success: false, error: 'No barcode provided' }, 400);
+    const storage = db(c);
 
     if (barcode === 'test-check-only') {
-      const count = await storage.getLiquorRecordCount();
-      return c.json({ success: false, barcode, error: 'Status check only', totalRecords: count });
+      return c.json({ success: false, barcode, error: 'Status check only', totalRecords: await storage.getLiquorRecordCount() });
     }
 
     const matchedProducts = await storage.findAllLiquorByBarcode(barcode);
-
-    if (matchedProducts.length === 0) {
-      return c.json({ success: false, barcode, error: 'Product not found in database' });
-    }
-
-    if (matchedProducts.length > 1) {
-      return c.json({ success: true, requiresSelection: true, barcode, matchedProducts });
-    }
+    if (!matchedProducts.length) return c.json({ success: false, barcode, error: 'Product not found in database' });
+    if (matchedProducts.length > 1) return c.json({ success: true, requiresSelection: true, barcode, matchedProducts });
 
     const matchedProduct = matchedProducts[0];
     if (sessionId) {
@@ -115,86 +106,71 @@ app.post('/scan-barcode', async (c) => {
         quantity: 1,
       });
     }
-
     return c.json({ success: true, requiresSelection: false, barcode, matchedProduct });
   } catch (err) {
-    return c.json({ success: false, error: 'Failed to process barcode scan', details: String(err) }, 500);
+    return c.json({ success: false, error: 'Failed to scan barcode', details: String(err) }, 500);
   }
 });
 
-// Get scanned items
 app.get('/scanned-items/:sessionId', async (c) => {
-  const storage = getStorage(c.env.DATABASE_URL);
   try {
     const { sessionId } = c.req.param();
+    const storage = db(c);
     const items = await storage.getScannedItems(sessionId);
-
     const itemsWithDetails = await Promise.all(
-      items.map(async (item) => {
+      items.map(async (item: any) => {
         const product = await storage.findLiquorByBarcode(item.scannedBarcode);
         return {
           ...item,
           product: product ? {
             ...product,
             shelfPrice: item.overridePrice !== null && item.overridePrice !== undefined
-              ? item.overridePrice
-              : product.shelfPrice,
+              ? item.overridePrice : product.shelfPrice,
           } : null,
         };
       })
     );
-
     return c.json({ success: true, sessionId, items: itemsWithDetails, totalCount: itemsWithDetails.length });
   } catch (err) {
     return c.json({ success: false, error: 'Failed to get scanned items' }, 500);
   }
 });
 
-// Delete individual item
 app.delete('/scanned-items/:sessionId/:itemId', async (c) => {
-  const storage = getStorage(c.env.DATABASE_URL);
   try {
     const { itemId } = c.req.param();
-    const deleted = await storage.deleteScannedItem(itemId);
-    if (deleted) return c.json({ success: true, message: 'Item deleted' });
-    return c.json({ success: false, error: 'Item not found' }, 404);
+    const deleted = await db(c).deleteScannedItem(itemId);
+    return deleted ? c.json({ success: true }) : c.json({ success: false, error: 'Item not found' }, 404);
   } catch (err) {
     return c.json({ success: false, error: 'Failed to delete item' }, 500);
   }
 });
 
-// Clear all scanned items for session
 app.delete('/scanned-items/:sessionId', async (c) => {
-  const storage = getStorage(c.env.DATABASE_URL);
   try {
-    const { sessionId } = c.req.param();
-    await storage.clearScannedItems(sessionId);
+    await db(c).clearScannedItems(c.req.param('sessionId'));
     return c.json({ success: true, message: 'Scanned items cleared' });
   } catch (err) {
-    return c.json({ success: false, error: 'Failed to clear scanned items' }, 500);
+    return c.json({ success: false, error: 'Failed to clear items' }, 500);
   }
 });
 
-// Update item price
 app.patch('/update-item-price', async (c) => {
-  const storage = getStorage(c.env.DATABASE_URL);
   try {
     const { sessionId, itemId, newPrice } = await c.req.json<{ sessionId: string; itemId: string; newPrice: number }>();
     if (!sessionId || !itemId || newPrice === undefined) {
-      return c.json({ success: false, error: 'Session ID, item ID, and new price are required' }, 400);
+      return c.json({ success: false, error: 'Missing required fields' }, 400);
     }
-    const updated = await storage.updateScannedItemPrice(itemId, newPrice);
-    if (updated) return c.json({ success: true, message: 'Item price updated' });
-    return c.json({ success: false, error: 'Item not found' }, 404);
+    const updated = await db(c).updateScannedItemPrice(itemId, newPrice);
+    return updated ? c.json({ success: true }) : c.json({ success: false, error: 'Item not found' }, 404);
   } catch (err) {
-    return c.json({ success: false, error: 'Failed to update item price' }, 500);
+    return c.json({ success: false, error: 'Failed to update price' }, 500);
   }
 });
 
-// Upload custom name mapping file
 app.post('/upload-custom-names', async (c) => {
-  const storage = getStorage(c.env.DATABASE_URL);
   try {
+    const storage = db(c);
     const formData = await c.req.formData();
     const file = formData.get('file') as File | null;
     if (!file) return c.json({ error: 'No file uploaded' }, 400);
@@ -205,21 +181,18 @@ app.post('/upload-custom-names', async (c) => {
     const filename = file.name || '';
 
     if (filename.endsWith('.csv') || file.type === 'text/csv') {
-      const content = await file.text();
-      const lines = content.split('\n').filter(l => l.trim());
+      const lines = (await file.text()).split('\n').filter(l => l.trim());
       for (const line of lines) {
-        const columns = line.split(',').map(col => col.trim().replace(/["']/g, ''));
-        if (columns.length >= 2) worksheetData.push(columns);
+        const cols = line.split(',').map(c => c.trim().replace(/["']/g, ''));
+        if (cols.length >= 2) worksheetData.push(cols);
       }
     } else {
-      const arrayBuffer = await file.arrayBuffer();
-      const uint8 = new Uint8Array(arrayBuffer);
-      const workbook = XLSX.read(uint8, { type: 'array' });
-      const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
-      worksheetData = XLSX.utils.sheet_to_json(firstSheet, { header: 1 }) as any[][];
+      const uint8 = new Uint8Array(await file.arrayBuffer());
+      const wb = XLSX.read(uint8, { type: 'array' });
+      worksheetData = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1 }) as any[][];
     }
 
-    if (worksheetData.length === 0) return c.json({ error: 'File appears to be empty' }, 400);
+    if (!worksheetData.length) return c.json({ error: 'File appears to be empty' }, 400);
 
     const firstRow = worksheetData[0];
     const hasHeaders = firstRow.some((cell: any) => {
@@ -227,26 +200,23 @@ app.post('/upload-custom-names', async (c) => {
       return s.includes('upc') || s.includes('name') || s.includes('description') || s.includes('brand');
     });
 
-    let upcIdx = -1, nameIdx = -1, startRow = 0;
-
+    let upcIdx = -1, nameIdx = -1, startRow = hasHeaders ? 1 : 0;
     if (hasHeaders) {
-      startRow = 1;
       for (let i = 0; i < firstRow.length; i++) {
         const h = String(firstRow[i] || '').toLowerCase().trim();
         if (upcIdx === -1 && (h.includes('upc') || h.includes('barcode') || h.includes('code'))) upcIdx = i;
         if (nameIdx === -1 && (h.includes('name') || h.includes('description') || h.includes('brand') || h.includes('product'))) nameIdx = i;
       }
     }
-
-    if (upcIdx === -1 || nameIdx === -1) { upcIdx = 0; nameIdx = 1; startRow = hasHeaders ? 1 : 0; }
+    if (upcIdx === -1 || nameIdx === -1) { upcIdx = 0; nameIdx = 1; }
 
     let mappingsAdded = 0, skippedRows = 0;
     for (let i = startRow; i < worksheetData.length; i++) {
       const row = worksheetData[i];
       if (row && row.length > Math.max(upcIdx, nameIdx)) {
-        const upcCode = String(row[upcIdx] || '').trim();
-        const customName = String(row[nameIdx] || '').trim();
-        if (upcCode && customName) { await storage.addCustomNameMapping({ upcCode, customName }); mappingsAdded++; }
+        const upc = String(row[upcIdx] || '').trim();
+        const name = String(row[nameIdx] || '').trim();
+        if (upc && name) { await storage.addCustomNameMapping(upc, name); mappingsAdded++; }
         else skippedRows++;
       } else skippedRows++;
     }
@@ -257,99 +227,80 @@ app.post('/upload-custom-names', async (c) => {
   }
 });
 
-// Clear custom name mappings
 app.delete('/clear-custom-names', async (c) => {
-  const storage = getStorage(c.env.DATABASE_URL);
   try {
-    await storage.clearCustomNameMappings();
-    return c.json({ success: true, message: 'Custom name mappings cleared' });
+    await db(c).clearCustomNameMappings();
+    return c.json({ success: true });
   } catch (err) {
-    return c.json({ error: 'Failed to clear custom name mappings', details: String(err) }, 500);
+    return c.json({ error: 'Failed to clear mappings' }, 500);
   }
 });
 
-// Get custom name mappings
 app.get('/custom-names', async (c) => {
-  const storage = getStorage(c.env.DATABASE_URL);
   try {
-    const mappings = await storage.getCustomNameMappings();
+    const mappings = await db(c).getCustomNameMappings();
     return c.json({ success: true, count: mappings.length, mappings });
   } catch (err) {
-    return c.json({ error: 'Failed to fetch custom name mappings', details: String(err) }, 500);
+    return c.json({ error: 'Failed to fetch mappings' }, 500);
   }
 });
 
-// Generate Excel file
 app.post('/generate-excel', async (c) => {
   try {
     const { records, filename } = await c.req.json<{ records: any[]; filename?: string }>();
-    if (!records || !Array.isArray(records) || records.length === 0) {
-      return c.json({ error: 'Invalid or empty records data' }, 400);
-    }
+    if (!records?.length) return c.json({ error: 'No data to export' }, 400);
 
-    const isScannedItemsData = records[0] && records[0]["ADA Number"] !== undefined;
-
-    let worksheetData: any[][];
-    if (isScannedItemsData) {
-      worksheetData = [
+    const isScanned = records[0]?.["ADA Number"] !== undefined;
+    let data: any[][];
+    if (isScanned) {
+      data = [
         ["LIQUOR CODE","BRAND NAME","ADA NUMBER","ADA NAME","VENDOR NAME","PROOF","BOTTLE SIZE","PACK SIZE","ON PREMISE","OFF PREMISE","SHELF PRICE","UPC CODE 1","UPC CODE 2","EFFECTIVE DATE"],
         ...records.map(r => [r["Liquor Code"],r["Brand Name"],r["ADA Number"],r["ADA Name"],r["Vendor Name"],r["Proof"],r["Bottle Size"],r["Pack Size"],r["On Premise"],r["Off Premise"],r["Shelf Price"],r["UPC Code 1"],r["UPC Code 2"],r["Effective Date"]]),
       ];
     } else {
-      worksheetData = [
+      data = [
         ["LIQUOR CODE","BRAND NAME","ADA NUMBER","ADA NAME","VENDOR NAME","PROOF","BOTTLE SIZE","PACK SIZE","ON PREMISE PRICE","OFF PREMISE PRICE","SHELF PRICE","UPC CODE 1","UPC CODE 2","EFFECTIVE DATE"],
         ...records.map(r => [r.liquorCode,r.brandName,r.adaNumber,r.adaName,r.vendorName,r.proof,r.bottleSize,r.packSize,r.onPremisePrice,r.offPremisePrice,r.shelfPrice,r.upcCode1,r.upcCode2,r.effectiveDate]),
       ];
     }
 
-    const workbook = XLSX.utils.book_new();
-    const worksheet = XLSX.utils.aoa_to_sheet(worksheetData);
-    XLSX.utils.book_append_sheet(workbook, worksheet, isScannedItemsData ? 'Scanned Items' : 'Liquor Data');
-    const excelBuffer = XLSX.write(workbook, { type: 'array', bookType: 'xlsx' });
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(data), isScanned ? 'Scanned Items' : 'Liquor Data');
+    const buf = XLSX.write(wb, { type: 'array', bookType: 'xlsx' });
+    const outName = filename || (isScanned ? 'scanned_liquor.xlsx' : 'liquor_data.xlsx');
 
-    const outputFilename = filename || (isScannedItemsData ? 'scanned_liquor.xlsx' : 'liquor_data.xlsx');
-
-    return new Response(new Uint8Array(excelBuffer), {
+    return new Response(new Uint8Array(buf), {
       headers: {
         'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-        'Content-Disposition': `attachment; filename="${outputFilename}"`,
+        'Content-Disposition': `attachment; filename="${outName}"`,
       },
     });
   } catch (err) {
-    return c.json({ error: 'Failed to generate Excel file', details: String(err) }, 500);
+    return c.json({ error: 'Failed to generate Excel', details: String(err) }, 500);
   }
 });
 
-// Fetch liquor data from Michigan state website
 app.post('/fetch-liquor-data', async (c) => {
-  const storage = getStorage(c.env.DATABASE_URL);
   try {
     const url = 'https://www.michigan.gov/lara/-/media/Project/Websites/lara/lcc/Price-Book/May-2-2026-Price-Book-TXT.txt?rev=0c6b278ff50242b7917b090cc9f6bbc2&hash=CDD79D3A69C5876AEA62FF8E0756ADEA';
     const response = await fetch(url, {
       headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
     });
-    if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-
-    const fileContent = await response.text();
-    const result = await processTsvContent(fileContent, storage);
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const result = await processTsvContent(await response.text(), db(c));
     return c.json({ ...result, source: 'Michigan State Website', url, fetchedAt: new Date().toISOString() });
   } catch (err) {
-    return c.json({ success: false, error: 'Failed to fetch liquor data from website', details: String(err) }, 500);
+    return c.json({ success: false, error: 'Failed to fetch liquor data', details: String(err) }, 500);
   }
 });
 
-// Add item manually
 app.post('/add-item', async (c) => {
-  const storage = getStorage(c.env.DATABASE_URL);
   try {
     const { liquorRecordId, sessionId, scannedBarcode } = await c.req.json<{ liquorRecordId: string; sessionId: string; scannedBarcode?: string }>();
-    if (!liquorRecordId || !sessionId) {
-      return c.json({ success: false, error: 'Missing required fields' }, 400);
-    }
-
+    if (!liquorRecordId || !sessionId) return c.json({ success: false, error: 'Missing required fields' }, 400);
+    const storage = db(c);
     const liquorRecord = await storage.getLiquorRecordById(liquorRecordId);
     if (!liquorRecord) return c.json({ success: false, error: 'Liquor record not found' }, 404);
-
     await storage.addScannedItem({
       sessionId,
       liquorRecordId: liquorRecord.id,
@@ -359,130 +310,90 @@ app.post('/add-item', async (c) => {
       scannedAt: new Date().toISOString(),
       quantity: 1,
     });
-
-    return c.json({ success: true, message: 'Item added successfully', liquorRecord });
+    return c.json({ success: true, liquorRecord });
   } catch (err) {
     return c.json({ success: false, error: 'Failed to add item' }, 500);
   }
 });
 
-// Search liquor records
 app.get('/search-liquor', async (c) => {
-  const storage = getStorage(c.env.DATABASE_URL);
   try {
     const query = c.req.query('query') || '';
     if (query.length < 2) return c.json({ success: true, results: [], message: 'Query too short' });
-
-    const { results, totalFound } = await storage.searchLiquorRecords(query, 10);
+    const { results, totalFound } = await db(c).searchLiquorRecords(query, 10);
     return c.json({ success: true, results, totalFound });
   } catch (err) {
-    return c.json({ success: false, error: 'Failed to search liquor records' }, 500);
+    return c.json({ success: false, error: 'Failed to search' }, 500);
   }
 });
 
-// Generate printable labels
 app.post('/generate-labels', async (c) => {
-  const storage = getStorage(c.env.DATABASE_URL);
   try {
     const { sessionId } = await c.req.json<{ sessionId: string }>();
-    if (!sessionId) return c.json({ success: false, error: 'Session ID is required' }, 400);
-
+    if (!sessionId) return c.json({ success: false, error: 'Session ID required' }, 400);
+    const storage = db(c);
     const items = await storage.getScannedItems(sessionId);
     const itemsWithDetails = (await Promise.all(
-      items.map(async (item) => {
+      items.map(async (item: any) => {
         const product = await storage.getLiquorRecordById(item.liquorRecordId || '');
         if (!product) return null;
-        return {
-          ...item,
-          product: {
-            ...product,
-            shelfPrice: item.overridePrice !== null && item.overridePrice !== undefined
-              ? item.overridePrice
-              : product.shelfPrice,
-          },
-        };
+        return { ...item, product: { ...product, shelfPrice: item.overridePrice ?? product.shelfPrice } };
       })
     )).filter(Boolean);
-
-    if (itemsWithDetails.length === 0) {
-      return c.json({ success: false, error: 'No items to print' }, 400);
-    }
-
-    const labelHtml = generateLabelHTML(itemsWithDetails);
-    return c.html(labelHtml);
+    if (!itemsWithDetails.length) return c.json({ success: false, error: 'No items to print' }, 400);
+    return c.html(generateLabelHTML(itemsWithDetails));
   } catch (err) {
     return c.json({ success: false, error: 'Failed to generate labels' }, 500);
   }
 });
 
-// ── Session routes ────────────────────────────────────────────────────────────
+// ── Sessions ──────────────────────────────────────────────────────────────────
 
 app.get('/sessions/active', async (c) => {
-  const storage = getStorage(c.env.DATABASE_URL);
   try {
-    const session = await storage.getActiveSession();
-    return c.json({ success: true, session });
-  } catch (err) {
-    return c.json({ success: false, error: 'Failed to get active session' }, 500);
-  }
+    return c.json({ success: true, session: await db(c).getActiveSession() });
+  } catch (err) { return c.json({ success: false, error: 'Failed' }, 500); }
 });
 
 app.get('/sessions', async (c) => {
-  const storage = getStorage(c.env.DATABASE_URL);
   try {
-    const s = await storage.getSessions();
-    return c.json({ success: true, sessions: s });
-  } catch (err) {
-    return c.json({ success: false, error: 'Failed to get sessions' }, 500);
-  }
+    return c.json({ success: true, sessions: await db(c).getSessions() });
+  } catch (err) { return c.json({ success: false, error: 'Failed' }, 500); }
 });
 
 app.post('/sessions', async (c) => {
-  const storage = getStorage(c.env.DATABASE_URL);
   try {
     const { name } = await c.req.json<{ name: string }>();
-    if (!name) return c.json({ success: false, error: 'Session name is required' }, 400);
-    const session = await storage.createSession({ name, itemCount: 0, isActive: 1 });
-    return c.json({ success: true, session });
-  } catch (err) {
-    return c.json({ success: false, error: 'Failed to create session' }, 500);
-  }
+    if (!name) return c.json({ success: false, error: 'Name required' }, 400);
+    return c.json({ success: true, session: await db(c).createSession(name) });
+  } catch (err) { return c.json({ success: false, error: 'Failed' }, 500); }
 });
 
 app.post('/sessions/:sessionId/activate', async (c) => {
-  const storage = getStorage(c.env.DATABASE_URL);
   try {
     const { sessionId } = c.req.param();
-    await storage.setActiveSession(sessionId);
-    const session = await storage.getSession(sessionId);
-    return c.json({ success: true, session });
-  } catch (err) {
-    return c.json({ success: false, error: 'Failed to set active session' }, 500);
-  }
+    await db(c).setActiveSession(sessionId);
+    return c.json({ success: true, session: await db(c).getSession(sessionId) });
+  } catch (err) { return c.json({ success: false, error: 'Failed' }, 500); }
 });
 
 app.delete('/sessions/:sessionId', async (c) => {
-  const storage = getStorage(c.env.DATABASE_URL);
   try {
-    const { sessionId } = c.req.param();
-    const deleted = await storage.deleteSession(sessionId);
-    if (deleted) return c.json({ success: true, message: 'Session deleted' });
-    return c.json({ success: false, error: 'Session not found' }, 404);
-  } catch (err) {
-    return c.json({ success: false, error: 'Failed to delete session' }, 500);
-  }
+    const deleted = await db(c).deleteSession(c.req.param('sessionId'));
+    return deleted ? c.json({ success: true }) : c.json({ success: false, error: 'Not found' }, 404);
+  } catch (err) { return c.json({ success: false, error: 'Failed' }, 500); }
 });
 
 // ── Price comparison ──────────────────────────────────────────────────────────
 
 app.post('/compare-prices', async (c) => {
-  const storage = getStorage(c.env.DATABASE_URL);
   try {
     const { csvText } = await c.req.json<{ csvText: string }>();
-    if (!csvText) return c.json({ success: false, error: 'No CSV text provided' }, 400);
+    if (!csvText) return c.json({ success: false, error: 'No CSV provided' }, 400);
+    const storage = db(c);
 
     const dbCount = await storage.getLiquorRecordCount();
-    if (dbCount === 0) return c.json({ success: true, rows: [], totalRows: 0, dbEmpty: true });
+    if (!dbCount) return c.json({ success: true, rows: [], totalRows: 0, dbEmpty: true });
 
     function parseCsvLine(line: string): string[] {
       const fields: string[] = [];
@@ -497,31 +408,29 @@ app.post('/compare-prices', async (c) => {
       return fields;
     }
 
-    const lines = csvText.split(/\r?\n/).filter((l: string) => l.trim());
-    if (lines.length < 2) return c.json({ success: false, error: 'CSV appears empty' }, 400);
+    const lines = csvText.split(/\r?\n/).filter(l => l.trim());
+    if (lines.length < 2) return c.json({ success: false, error: 'CSV too short' }, 400);
 
-    const header = parseCsvLine(lines[0]).map((h: string) => h.toLowerCase().trim());
-    const col = (name: string) => header.indexOf(name);
+    const header = parseCsvLine(lines[0]).map(h => h.toLowerCase().trim());
+    const col = (n: string) => header.indexOf(n);
     const upcIdx = col('upc'), nameIdx = col('name'), priceIdx = col('price'),
           centsIdx = col('cents'), deptIdx = col('department'), sizeIdx = col('size');
 
     if (upcIdx === -1 || nameIdx === -1) {
-      return c.json({ success: false, error: 'CSV missing required Upc or Name columns.' }, 400);
+      return c.json({ success: false, error: 'CSV missing Upc or Name columns' }, 400);
     }
 
     const rows = [];
     for (let i = 1; i < lines.length; i++) {
       const fields = parseCsvLine(lines[i]);
       if (fields.length < 2) continue;
-
-      const stripExcel = (v: string) => v.replace(/[="]/g, '').trim();
-      const rawUpc  = stripExcel((fields[upcIdx]  || '').trim());
+      const strip = (v: string) => v.replace(/[="]/g, '').trim();
+      const rawUpc = strip((fields[upcIdx] || '').trim());
       const rawName = (fields[nameIdx] || '').trim();
       const rawPrice = priceIdx >= 0 ? (fields[priceIdx] || '').trim() : '';
       const rawCents = centsIdx >= 0 ? (fields[centsIdx] || '').trim() : '';
-      const dept     = deptIdx >= 0  ? (fields[deptIdx]  || '').trim() : 'Liquor';
-      const sizeCode = stripExcel(sizeIdx >= 0 ? (fields[sizeIdx] || '').trim() : '');
-
+      const dept = deptIdx >= 0 ? (fields[deptIdx] || '').trim() : 'Liquor';
+      const sizeCode = strip(sizeIdx >= 0 ? (fields[sizeIdx] || '').trim() : '');
       if (!rawUpc && !rawName) continue;
 
       let registerPrice = 0;
@@ -529,11 +438,10 @@ app.post('/compare-prices', async (c) => {
       else if (rawPrice) registerPrice = parseFloat(rawPrice.replace(/[^0-9.]/g, '')) || 0;
 
       let matches = await storage.findAllLiquorByBarcode(rawUpc);
-      let matchedBy: 'upc' | 'code' | null = matches.length > 0 ? 'upc' : null;
-
-      if (matches.length === 0 && sizeCode) {
+      let matchedBy: 'upc' | 'code' | null = matches.length ? 'upc' : null;
+      if (!matches.length && sizeCode) {
         matches = await storage.findAllLiquorByCode(sizeCode);
-        if (matches.length > 0) matchedBy = 'code';
+        if (matches.length) matchedBy = 'code';
       }
 
       const match = matches[0] || null;
@@ -542,14 +450,12 @@ app.post('/compare-prices', async (c) => {
 
       rows.push({
         upc: rawUpc, name: rawName, registerPrice, department: dept, liquorCode: sizeCode,
-        matched: !!match, matchedBy,
-        multipleMatches: matches.length > 1,
+        matched: !!match, matchedBy, multipleMatches: matches.length > 1,
         allMatches: matches.length > 1 ? matches : undefined,
         michiganPrice, michiganName: match ? `${match.brandName} ${match.bottleSize}` : null,
         michiganBottleSize: match?.bottleSize ?? null,
         michiganLiquorCode: match?.liquorCode ?? null,
-        michiganRecord: match ?? null,
-        priceDiff,
+        michiganRecord: match ?? null, priceDiff,
       });
     }
 

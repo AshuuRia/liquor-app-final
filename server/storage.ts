@@ -169,7 +169,8 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getScannedItems(sessionId: string): Promise<ScannedItem[]> {
-    return this.db.select().from(scannedItems).where(eq(scannedItems.sessionId, sessionId));
+    const result = await this.db.select().from(scannedItems).where(eq(scannedItems.sessionId, sessionId));
+    return result ?? [];
   }
 
   async clearScannedItems(sessionId: string): Promise<void> {

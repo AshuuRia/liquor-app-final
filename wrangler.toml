@@ -3,6 +3,10 @@ compatibility_date = "2024-09-23"
 compatibility_flags = ["nodejs_compat"]
 pages_build_output_dir = "dist/public"
 
-# Environment variables that are NOT secrets go here.
-# Set DATABASE_URL as a secret in the Cloudflare Pages dashboard:
-#   Pages > Your Project > Settings > Environment Variables > Add secret
+# ── Cloudflare D1 database binding ───────────────────────────────────────────
+# After running `npx wrangler d1 create liquor-inventory-db`, paste the
+# database_id output below.
+[[d1_databases]]
+binding = "DB"
+database_name = "liquor-inventory-db"
+database_id = "REPLACE_WITH_YOUR_DATABASE_ID"
