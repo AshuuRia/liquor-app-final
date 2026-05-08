@@ -9,4 +9,4 @@ pages_build_output_dir = "dist/public"
 [[d1_databases]]
 binding = "DB"
 database_name = "liquor-inventory-db"
-database_id = "REPLACE_WITH_YOUR_DATABASE_ID"
+database_id = "060af7ad-0e5a-4f29-8b81-2c13462c9ca0"
