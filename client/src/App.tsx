@@ -12,7 +12,7 @@ import MorePage from "@/pages/more-page";
 import PriceComparePage from "@/pages/price-compare-page";
 import { ScanLine, Search, ListChecks, MoreHorizontal, ScanBarcode, LogOut, User } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
-import { isClerkMode, initClerk, getClerk } from "@/lib/clerk";
+import { loadConfig, isClerkMode, initClerk, getClerk } from "@/lib/clerk";
 
 // ── Bottom navigation ─────────────────────────────────────────────────────────
 
@@ -228,13 +228,16 @@ function AppShell() {
 // ── Root ──────────────────────────────────────────────────────────────────────
 
 function App() {
-  const [clerkReady, setClerkReady] = useState(!isClerkMode());
+  const [clerkReady, setClerkReady] = useState(false);
 
   useEffect(() => {
-    if (!isClerkMode()) return;
-    initClerk()
-      .then(() => setClerkReady(true))
-      .catch(() => setClerkReady(true));
+    loadConfig()
+      .then(() => {
+        if (!isClerkMode()) return;
+        return initClerk();
+      })
+      .catch(() => {})
+      .finally(() => setClerkReady(true));
   }, []);
 
   return (

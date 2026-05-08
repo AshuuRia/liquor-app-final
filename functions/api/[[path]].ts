@@ -8,6 +8,7 @@ type Env = {
   Bindings: {
     DB: any;
     CLERK_SECRET_KEY: string;
+    CLERK_PUBLISHABLE_KEY: string;
   };
   Variables: {
     userId: string;
@@ -85,6 +86,12 @@ const requireAuth = async (c: any, next: any) => {
   c.set('userId', userId);
   await next();
 };
+
+// ── Public config (no auth required) ─────────────────────────────────────────
+
+app.get('/config', (c) => {
+  return c.json({ clerkPublishableKey: c.env.CLERK_PUBLISHABLE_KEY || null });
+});
 
 // ── Auth endpoints ────────────────────────────────────────────────────────────
 

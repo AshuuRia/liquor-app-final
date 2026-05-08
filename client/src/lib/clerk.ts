@@ -1,14 +1,26 @@
-const publishableKey = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY as string | undefined;
-
+let _publishableKey: string | null = null;
 let _clerk: any = null;
 let _ready = false;
 
+export async function loadConfig(): Promise<void> {
+  if (_publishableKey !== null) return;
+  try {
+    const res = await fetch('/api/config');
+    if (res.ok) {
+      const data = await res.json() as { clerkPublishableKey?: string };
+      _publishableKey = data.clerkPublishableKey || null;
+    }
+  } catch {
+    _publishableKey = null;
+  }
+}
+
 export function isClerkMode(): boolean {
-  return !!publishableKey;
+  return !!_publishableKey;
 }
 
 export async function initClerk(): Promise<any> {
-  if (!publishableKey) return null;
+  if (!_publishableKey) return null;
   if (_clerk && _ready) return _clerk;
 
   if (!(window as any).__clerk_loaded) {
@@ -24,7 +36,7 @@ export async function initClerk(): Promise<any> {
 
   const ClerkCtor = (window as any).Clerk;
   if (!ClerkCtor) throw new Error('Clerk not available');
-  _clerk = new ClerkCtor(publishableKey);
+  _clerk = new ClerkCtor(_publishableKey);
   await _clerk.load();
   _ready = true;
   return _clerk;

@@ -3,6 +3,11 @@ compatibility_date = "2024-09-23"
 compatibility_flags = ["nodejs_compat"]
 pages_build_output_dir = "dist/public"
 
+# ── Public runtime variables ──────────────────────────────────────────────────
+# Paste your Clerk publishable key (pk_live_...) here.
+[vars]
+CLERK_PUBLISHABLE_KEY = "REPLACE_WITH_YOUR_CLERK_PUBLISHABLE_KEY"
+
 # ── Cloudflare D1 database binding ───────────────────────────────────────────
 # After running `npx wrangler d1 create liquor-inventory-db`, paste the
 # database_id output below.
