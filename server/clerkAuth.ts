@@ -20,9 +20,11 @@ async function getJwks(): Promise<any[]> {
   if (_jwksCache.length && Date.now() < _jwksCacheExpiry) return _jwksCache;
 
   const url = getPublicJwksUrl();
+  console.log(`[clerkAuth] fetching JWKS from ${url}`);
   const res = await fetch(url);
   if (!res.ok) throw new Error(`Failed to fetch Clerk JWKS from ${url}: ${res.status}`);
   const data = (await res.json()) as { keys: any[] };
+  console.log(`[clerkAuth] JWKS fetched ok, ${data.keys.length} key(s)`);
   _jwksCache = data.keys;
   _jwksCacheExpiry = Date.now() + 60 * 60 * 1000;
   return _jwksCache;
@@ -58,12 +60,15 @@ export async function verifyClerkToken(token: string): Promise<Record<string, an
 export const isAuthenticated: RequestHandler = async (req: any, res, next) => {
   const authHeader = req.headers["authorization"];
   if (!authHeader?.startsWith("Bearer ")) {
+    console.log(`[clerkAuth] ${req.method} ${req.path} → no Bearer token`);
     return res.status(401).json({ message: "Unauthorized" });
   }
   const payload = await verifyClerkToken(authHeader.slice(7));
   if (!payload) {
+    console.log(`[clerkAuth] ${req.method} ${req.path} → token verification FAILED`);
     return res.status(401).json({ message: "Unauthorized" });
   }
+  console.log(`[clerkAuth] ${req.method} ${req.path} → ok, user=${payload.sub}`);
   req.clerkUserId = payload.sub as string;
   req.clerkPayload = payload;
   next();

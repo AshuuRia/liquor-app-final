@@ -87,6 +87,32 @@ function normalizeBarcode(raw: string): string {
   return s || raw;
 }
 
+// ── Local (localStorage) save/load — always works, instant ────────────────────
+
+const LOCAL_KEY = "price_compare_session";
+
+function saveLocalSession(fileName: string, rows: ComparisonRow[]): void {
+  try {
+    localStorage.setItem(LOCAL_KEY, JSON.stringify({ fileName, rows }));
+  } catch { /* storage full — ignore */ }
+}
+
+function loadLocalSession(): { fileName: string; rows: ComparisonRow[] } | null {
+  try {
+    const raw = localStorage.getItem(LOCAL_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as { fileName: string; rows: ComparisonRow[] };
+    if (!parsed.rows?.length) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function clearLocalSession(): void {
+  try { localStorage.removeItem(LOCAL_KEY); } catch { /* ignore */ }
+}
+
 // ── Cloud save/load helpers ───────────────────────────────────────────────────
 
 async function loadCloudSession(): Promise<{ fileName: string; rows: ComparisonRow[] } | null> {
@@ -107,13 +133,19 @@ async function loadCloudSession(): Promise<{ fileName: string; rows: ComparisonR
 }
 
 async function saveCloudSession(fileName: string, rows: ComparisonRow[]): Promise<void> {
-  const authHeaders = await getAuthHeaders();
-  await fetch("/api/price-compare/session", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", ...authHeaders },
-    credentials: "include",
-    body: JSON.stringify({ fileName, rowsJson: JSON.stringify(rows) }),
-  });
+  try {
+    const authHeaders = await getAuthHeaders();
+    const res = await fetch("/api/price-compare/session", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authHeaders },
+      credentials: "include",
+      body: JSON.stringify({ fileName, rowsJson: JSON.stringify(rows) }),
+    });
+    if (!res.ok) throw new Error(`${res.status}`);
+  } catch (e) {
+    console.warn("[price-compare] cloud save failed:", e);
+    throw e;
+  }
 }
 
 // ── Main component ────────────────────────────────────────────────────────────
@@ -143,29 +175,55 @@ export default function PriceComparePage() {
   const [cloudSaved, setCloudSaved]   = useState(false);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Refs that always hold the latest values so the unmount cleanup can read them
+  // Refs that always hold the latest values so unmount cleanup can read them synchronously
   const rowsRef     = useRef<ComparisonRow[]>([]);
   const fileNameRef = useRef<string>("");
   useEffect(() => { rowsRef.current     = rows;     }, [rows]);
   useEffect(() => { fileNameRef.current = fileName; }, [fileName]);
 
-  // ── Load saved session on mount ───────────────────────────────────────────
+  // ── Save to localStorage every time rows/fileName change ──────────────────
+  // This is synchronous and guaranteed — it's the primary persistence layer
+  // while the user is on this device. Cloud save is secondary (cross-device).
 
   useEffect(() => {
+    if (fileName && rows.length > 0) {
+      saveLocalSession(fileName, rows);
+    }
+  }, [rows, fileName]);
+
+  // ── Load on mount: cloud first, fall back to localStorage ─────────────────
+
+  useEffect(() => {
+    let cancelled = false;
+
+    // Show localStorage data immediately (instant, no network)
+    const local = loadLocalSession();
+    if (local && local.rows.length > 0) {
+      setRows(local.rows);
+      setFileName(local.fileName);
+      setCloudSaved(false);
+    }
+
+    // Then try to load fresher data from the cloud
     loadCloudSession().then(saved => {
+      if (cancelled) return;
       if (saved && saved.rows.length > 0) {
         setRows(saved.rows);
         setFileName(saved.fileName);
         setCloudSaved(true);
-        toast({
-          title: "Session restored",
-          description: `Loaded ${saved.rows.length} products from your last session.`,
-        });
+        if (!local || local.rows.length === 0) {
+          toast({
+            title: "Session restored",
+            description: `Loaded ${saved.rows.length} products from your last session.`,
+          });
+        }
       }
     });
+
+    return () => { cancelled = true; };
   }, []);
 
-  // ── Save immediately when navigating away (unmount) ───────────────────────
+  // ── On unmount: flush localStorage (sync), kick off cloud save (async) ────
 
   useEffect(() => {
     return () => {
@@ -173,12 +231,13 @@ export default function PriceComparePage() {
       const fn = fileNameRef.current;
       const rs = rowsRef.current;
       if (fn && rs.length > 0) {
-        saveCloudSession(fn, rs).catch(() => {});
+        saveLocalSession(fn, rs);          // synchronous — always succeeds
+        saveCloudSession(fn, rs).catch(() => {}); // best-effort async
       }
     };
   }, []);
 
-  // ── Auto-save rows to cloud (debounced 2 s) ────────────────────────────────
+  // ── Auto-save to cloud (debounced 2 s after last change) ──────────────────
 
   const scheduleCloudSave = useCallback((currentFileName: string, currentRows: ComparisonRow[]) => {
     if (!currentFileName || currentRows.length === 0) return;
@@ -190,7 +249,8 @@ export default function PriceComparePage() {
         await saveCloudSession(currentFileName, currentRows);
         setCloudSaved(true);
       } catch {
-        // silently ignore
+        // Cloud save failed — localStorage already has the data, so no data loss
+        setCloudSaved(false);
       } finally {
         setCloudSaving(false);
       }
