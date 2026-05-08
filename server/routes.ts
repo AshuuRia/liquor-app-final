@@ -3,7 +3,7 @@ import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import multer from "multer";
 import * as XLSX from "xlsx";
-import { isAuthenticated, getUserId, getUserProfile } from "./replitAuth";
+import { isAuthenticated, fetchClerkUser } from "./clerkAuth";
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -131,14 +131,25 @@ function parseCsvLine(line: string): string[] {
   return fields;
 }
 
+// ── getUserId helper ───────────────────────────────────────────────────────────
+
+function getUserId(req: any): string {
+  return req.clerkUserId as string;
+}
+
 // ── Route registration ─────────────────────────────────────────────────────────
 
 export async function registerRoutes(app: Express): Promise<Server> {
 
-  // ── Auth user — fetches profile from session ──────────────────────────────────
+  // ── Config — tells the frontend to use Clerk ──────────────────────────────────
+  app.get("/api/config", (_req, res) => {
+    res.json({ clerkPublishableKey: process.env.CLERK_PUBLISHABLE_KEY || null });
+  });
+
+  // ── Auth user — fetches profile from Clerk API ────────────────────────────────
   app.get("/api/auth/user", isAuthenticated, async (req: any, res) => {
     try {
-      const user = getUserProfile(req);
+      const user = await fetchClerkUser(req.clerkUserId);
       res.json(user);
     } catch {
       res.status(500).json({ message: "Failed to fetch user" });
@@ -305,7 +316,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const { sessionId } = req.params;
       await storage.clearScannedItems(sessionId);
-      res.json({ success: true, message: "Cleared scanned items" });
+      res.json({ success: true, message: "Scanned items cleared" });
     } catch (error) {
       res.status(500).json({ success: false, error: "Failed to clear scanned items" });
     }
@@ -394,6 +405,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // ── Custom name mappings (JSON) — used by more-page inline CSV parser ─────────
   app.post("/api/custom-names", isAuthenticated, async (req: any, res) => {
     try {
       const userId = getUserId(req);
@@ -473,16 +485,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const allRecords = await storage.getLiquorRecords();
       const liquorRecord = allRecords.find(r => r.id === liquorRecordId);
       if (!liquorRecord) return res.status(404).json({ success: false, error: "Liquor record not found" });
-
-      const barcode = scannedBarcode || liquorRecord.upcCode1 || liquorRecord.liquorCode;
       await storage.addScannedItem({
         sessionId,
-        liquorRecordId,
-        scannedBarcode: barcode,
+        liquorRecordId: liquorRecord.id,
+        scannedBarcode: scannedBarcode ? toBottleBarcode(scannedBarcode) : (liquorRecord.upcCode1 ? toBottleBarcode(liquorRecord.upcCode1) : 'manual-search'),
         scannedAt: new Date().toISOString(),
         quantity: 1,
       });
-      res.json({ success: true, message: "Item added" });
+      res.json({ success: true, message: "Item added successfully", liquorRecord });
     } catch (error) {
       res.status(500).json({ success: false, error: "Failed to add item" });
     }

@@ -143,6 +143,12 @@ export default function PriceComparePage() {
   const [cloudSaved, setCloudSaved]   = useState(false);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Refs that always hold the latest values so the unmount cleanup can read them
+  const rowsRef     = useRef<ComparisonRow[]>([]);
+  const fileNameRef = useRef<string>("");
+  useEffect(() => { rowsRef.current     = rows;     }, [rows]);
+  useEffect(() => { fileNameRef.current = fileName; }, [fileName]);
+
   // ── Load saved session on mount ───────────────────────────────────────────
 
   useEffect(() => {
@@ -157,6 +163,19 @@ export default function PriceComparePage() {
         });
       }
     });
+  }, []);
+
+  // ── Save immediately when navigating away (unmount) ───────────────────────
+
+  useEffect(() => {
+    return () => {
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+      const fn = fileNameRef.current;
+      const rs = rowsRef.current;
+      if (fn && rs.length > 0) {
+        saveCloudSession(fn, rs).catch(() => {});
+      }
+    };
   }, []);
 
   // ── Auto-save rows to cloud (debounced 2 s) ────────────────────────────────
