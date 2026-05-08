@@ -6,6 +6,7 @@ import {
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
+import { apiRequest } from "@/lib/queryClient";
 
 interface DbStatus {
   totalRecords: number;
@@ -85,7 +86,7 @@ export default function MorePage() {
         }
       }
       if (!mappings.length) { toast({ variant: "destructive", title: "No mappings found" }); return; }
-      const r = await fetch("/api/custom-names", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mappings }) });
+      const r = await apiRequest("POST", "/api/custom-names", { mappings });
       const d = await r.json();
       if (d.success) toast({ title: "Custom names uploaded", description: `${mappings.length} mappings saved` });
       else toast({ variant: "destructive", title: "Upload failed" });

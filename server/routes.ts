@@ -3,7 +3,7 @@ import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import multer from "multer";
 import * as XLSX from "xlsx";
-import { isAuthenticated } from "./replit_integrations/auth";
+import { isAuthenticated, fetchClerkUser } from "./clerkAuth";
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -134,24 +134,22 @@ function parseCsvLine(line: string): string[] {
 // ── getUserId helper ───────────────────────────────────────────────────────────
 
 function getUserId(req: any): string {
-  return req.user?.claims?.sub as string;
+  return req.clerkUserId as string;
 }
 
 // ── Route registration ─────────────────────────────────────────────────────────
 
 export async function registerRoutes(app: Express): Promise<Server> {
 
-  // ── Config — no Clerk key needed ─────────────────────────────────────────────
+  // ── Config — tells the frontend to use Clerk ──────────────────────────────────
   app.get("/api/config", (_req, res) => {
-    res.json({ clerkPublishableKey: null });
+    res.json({ clerkPublishableKey: process.env.CLERK_PUBLISHABLE_KEY || null });
   });
 
-  // ── Auth user — fetches profile from Replit Auth session ─────────────────────
+  // ── Auth user — fetches profile from Clerk API ────────────────────────────────
   app.get("/api/auth/user", isAuthenticated, async (req: any, res) => {
     try {
-      const { authStorage } = await import("./replit_integrations/auth");
-      const userId = req.user?.claims?.sub;
-      const user = await authStorage.getUser(userId);
+      const user = await fetchClerkUser(req.clerkUserId);
       res.json(user);
     } catch {
       res.status(500).json({ message: "Failed to fetch user" });
@@ -404,6 +402,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Upload custom names error:", error);
       res.status(500).json({ error: "Failed to process file" });
+    }
+  });
+
+  // ── Custom name mappings (JSON) — used by more-page inline CSV parser ─────────
+  app.post("/api/custom-names", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = getUserId(req);
+      const { mappings } = req.body as { mappings: { upcCode: string; customName: string }[] };
+      if (!Array.isArray(mappings) || mappings.length === 0) {
+        return res.status(400).json({ success: false, error: "mappings array is required" });
+      }
+      await storage.clearCustomNameMappings(userId);
+      for (const { upcCode, customName } of mappings) {
+        if (upcCode && customName) {
+          await storage.addCustomNameMapping({ upcCode, customName }, userId);
+        }
+      }
+      res.json({ success: true, mappingsAdded: mappings.length });
+    } catch (error) {
+      console.error("Custom names error:", error);
+      res.status(500).json({ success: false, error: "Failed to save custom name mappings" });
     }
   });
 

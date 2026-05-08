@@ -1,6 +1,7 @@
+import { useState, useEffect } from "react";
 import { Switch, Route, useLocation } from "wouter";
 import { queryClient } from "./lib/queryClient";
-import { QueryClientProvider } from "@tanstack/react-query";
+import { QueryClientProvider, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import NotFound from "@/pages/not-found";
@@ -11,7 +12,7 @@ import MorePage from "@/pages/more-page";
 import PriceComparePage from "@/pages/price-compare-page";
 import { ScanLine, Search, ListChecks, MoreHorizontal, ScanBarcode, LogOut, User } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { loadConfig, isClerkMode, initClerk, getClerk } from "@/lib/clerk";
 
 // ── Bottom navigation ─────────────────────────────────────────────────────────
 
@@ -96,8 +97,16 @@ function Router() {
 
 function LandingPage() {
   function handleSignIn() {
-    window.location.href = "/api/login";
+    if (isClerkMode()) {
+      getClerk()?.openSignIn();
+    } else {
+      window.location.href = "/api/login";
+    }
   }
+
+  const subtitle = isClerkMode()
+    ? "Google, GitHub, Apple, or email — your choice"
+    : "Google, GitHub, Apple, or email — your choice";
 
   return (
     <div className="min-h-screen bg-zinc-950 flex flex-col items-center justify-center px-6 text-center">
@@ -135,7 +144,7 @@ function LandingPage() {
         <User className="h-5 w-5" />
         Sign in to get started
       </button>
-      <p className="mt-4 text-xs text-zinc-600">Sign in with your Replit account</p>
+      <p className="mt-4 text-xs text-zinc-600">{subtitle}</p>
     </div>
   );
 }
@@ -143,8 +152,15 @@ function LandingPage() {
 // ── Signed-in header strip ────────────────────────────────────────────────────
 
 function AuthHeader({ user }: { user: any }) {
-  function handleSignOut() {
-    window.location.href = "/api/logout";
+  const qc = useQueryClient();
+
+  async function handleSignOut() {
+    if (isClerkMode()) {
+      await getClerk()?.signOut();
+      qc.setQueryData(["/api/auth/user"], null);
+    } else {
+      window.location.href = "/api/logout";
+    }
   }
 
   return (
@@ -184,7 +200,17 @@ function Spinner() {
 }
 
 function AppShell() {
+  const qc = useQueryClient();
   const { user, isLoading, isAuthenticated } = useAuth();
+
+  useEffect(() => {
+    const clerk = getClerk();
+    if (!clerk) return;
+    const unsub = clerk.addListener(() => {
+      qc.invalidateQueries({ queryKey: ["/api/auth/user"] });
+    });
+    return () => { if (typeof unsub === "function") unsub(); };
+  }, [qc]);
 
   if (isLoading) return <Spinner />;
   if (!isAuthenticated) return <LandingPage />;
@@ -202,11 +228,23 @@ function AppShell() {
 // ── Root ──────────────────────────────────────────────────────────────────────
 
 function App() {
+  const [clerkReady, setClerkReady] = useState(false);
+
+  useEffect(() => {
+    loadConfig()
+      .then(() => {
+        if (!isClerkMode()) return;
+        return initClerk();
+      })
+      .catch(() => {})
+      .finally(() => setClerkReady(true));
+  }, []);
+
   return (
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
         <Toaster />
-        <AppShell />
+        {clerkReady ? <AppShell /> : <Spinner />}
       </TooltipProvider>
     </QueryClientProvider>
   );
