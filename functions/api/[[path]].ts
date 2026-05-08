@@ -589,4 +589,4 @@ app.post('/price-compare/session', requireAuth, async (c) => {
   }
 });
 
-export const onRequest = app.fetch;
+export const onRequest = (context: any) => app.fetch(context.request, context.env, context);
