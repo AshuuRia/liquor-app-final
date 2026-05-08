@@ -141,6 +141,11 @@ function getUserId(req: any): string {
 
 export async function registerRoutes(app: Express): Promise<Server> {
 
+  // ── Config endpoint (returns empty clerkPublishableKey — Replit Auth is used) ──
+  app.get("/api/config", (_req, res) => {
+    res.json({ clerkPublishableKey: null });
+  });
+
   // ── Michigan data import (no auth required — anyone can refresh the shared DB) ──
 
   app.post("/api/process-file", upload.single('file'), async (req, res) => {
