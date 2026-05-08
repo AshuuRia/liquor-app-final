@@ -1,0 +1,94 @@
+What was built
+Three new files for Cloudflare production:
+
+functions/_schema.ts — SQLite/D1 schema (same tables as Postgres, but using SQLite types: text, real, integer; IDs generated via crypto.randomUUID())
+functions/_storage.ts — D1Storage class with all 20+ database methods using Drizzle's D1 adapter; bulk inserts done in chunks of 50 via db.batch()
+migrations/d1/0001_init.sql — SQL to create all 4 tables + 5 indexes, applied once to your D1 database
+functions/api/[[path]].ts — Rewrote the Hono API to use D1Storage instead of Neon; no environment variables needed, just env.DB injected by Cloudflare
+Your Express dev server on Replit is unchanged — it still uses Neon Postgres. The Cloudflare deployment uses an entirely separate code path (the functions/ folder).
+
+Step-by-Step Cloudflare Deployment Tutorial
+Prerequisites
+Free Cloudflare account at cloudflare.com
+Node.js on your local computer
+This project pushed to a GitHub repository
+Step 1 — Install Wrangler and log in
+On your local machine (not Replit):
+
+npm install -g wrangler
+wrangler login
+
+A browser tab opens — authorize Wrangler with your Cloudflare account, then return to the terminal.
+
+Step 2 — Create the D1 database
+npx wrangler d1 create liquor-inventory-db
+
+The output will look like this:
+
+✅ Successfully created DB 'liquor-inventory-db'
+[[d1_databases]]
+binding = "DB"
+database_name = "liquor-inventory-db"
+database_id = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+
+Copy the database_id value — you'll need it next.
+
+Step 3 — Paste your database_id into wrangler.toml
+Open wrangler.toml in the project root. Replace REPLACE_WITH_YOUR_DATABASE_ID:
+
+[[d1_databases]]
+binding = "DB"
+database_name = "liquor-inventory-db"
+database_id = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"   ← paste here
+
+Step 4 — Create the tables in D1
+npx wrangler d1 execute liquor-inventory-db --file=migrations/d1/0001_init.sql
+
+This runs once and creates all 4 tables (liquor_records, scanned_items, sessions, custom_name_mappings) plus indexes. Verify it worked:
+
+npx wrangler d1 execute liquor-inventory-db --command="SELECT name FROM sqlite_master WHERE type='table'"
+
+Step 5 — Push to GitHub
+git add .
+git commit -m "Add Cloudflare D1 support"
+git push
+
+Step 6 — Create a Cloudflare Pages project
+Go to dash.cloudflare.com
+Left sidebar → Workers & Pages → Create application → Pages tab
+Click Connect to Git → authorize GitHub → select your repo
+Click Begin setup
+Step 7 — Set the build settings
+Field	Value
+Build command	vite build
+Build output directory	dist/public
+Root directory	(leave blank)
+No environment variables needed — D1 uses a binding, not a connection string.
+
+Click Save and Deploy.
+
+Step 8 — Add the D1 binding in the dashboard
+After the first deploy finishes (it may fail on the first attempt without the binding — that's okay):
+
+Go to your Pages project → Settings → Functions
+Scroll to D1 database bindings → click Add binding
+Variable name: DB
+Select: liquor-inventory-db
+Click Save
+Step 9 — Redeploy
+Go to Deployments → click ... on the latest → Retry deployment.
+
+Or just push any commit to GitHub — Pages redeploys automatically on every push.
+
+Step 10 — Load the Michigan liquor data
+Once your app is live at https://your-project.pages.dev:
+
+Open the app → tap More tab (bottom right)
+Tap Refresh Data
+Wait ~5–10 seconds while 13,899 records load into D1
+Done — data persists permanently, no need to reload unless the monthly price book updates
+Free tier limits (you won't hit these)
+Service	Free allowance
+Cloudflare Pages	Unlimited requests, 500 builds/month
+Pages Functions	100,000 requests/day
+D1 database	5 GB storage · 5M reads/day · 100K writes/day

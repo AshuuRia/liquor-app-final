@@ -1,13 +1,13 @@
 import postgres from 'postgres';
 import { drizzle } from 'drizzle-orm/postgres-js';
-import { eq, or, sql, ilike } from 'drizzle-orm';
+import { eq, or, sql, ilike, and, desc } from 'drizzle-orm';
 import {
-  type User, type InsertUser,
   type LiquorRecord, type InsertLiquorRecord,
   type ScannedItem, type InsertScannedItem,
   type Session, type InsertSession,
   type CustomNameMapping, type InsertCustomNameMapping,
-  liquorRecords, scannedItems, sessions, customNameMappings, users,
+  type PriceCompareSession, type InsertPriceCompareSession,
+  liquorRecords, scannedItems, sessions, customNameMappings, priceCompareSessions,
 } from "@shared/schema";
 import { randomUUID } from "crypto";
 
@@ -21,10 +21,6 @@ export function normalizeUpc(upc: string | null | undefined): string {
 // ── Storage interface ─────────────────────────────────────────────────────────
 
 export interface IStorage {
-  getUser(id: string): Promise<User | undefined>;
-  getUserByUsername(username: string): Promise<User | undefined>;
-  createUser(user: InsertUser): Promise<User>;
-
   // Liquor record methods
   createLiquorRecord(record: InsertLiquorRecord): Promise<LiquorRecord>;
   bulkCreateLiquorRecords(records: InsertLiquorRecord[]): Promise<void>;
@@ -37,56 +33,44 @@ export interface IStorage {
   getLiquorRecordCount(): Promise<number>;
   searchLiquorRecords(query: string, limit?: number): Promise<{ results: LiquorRecord[], totalFound: number }>;
 
-  // Scanned items methods (persisted)
+  // Scanned items (persisted)
   addScannedItem(item: InsertScannedItem): Promise<ScannedItem>;
   getScannedItems(sessionId: string): Promise<ScannedItem[]>;
   clearScannedItems(sessionId: string): Promise<void>;
   deleteScannedItem(itemId: string): Promise<boolean>;
   updateScannedItemPrice(itemId: string, newPrice: number): Promise<boolean>;
 
-  // Session methods (persisted)
-  createSession(session: InsertSession): Promise<Session>;
+  // Scan sessions (persisted, user-scoped)
+  createSession(session: InsertSession, userId?: string): Promise<Session>;
   getSession(sessionId: string): Promise<Session | undefined>;
-  getSessions(): Promise<Session[]>;
+  getSessions(userId?: string): Promise<Session[]>;
   updateSessionItemCount(sessionId: string, count: number): Promise<void>;
   deleteSession(sessionId: string): Promise<boolean>;
-  getActiveSession(): Promise<Session | undefined>;
+  getActiveSession(userId?: string): Promise<Session | undefined>;
   setActiveSession(sessionId: string): Promise<void>;
 
-  // Custom name mapping methods (persisted)
-  addCustomNameMapping(mapping: InsertCustomNameMapping): Promise<CustomNameMapping>;
-  getCustomNameMappings(): Promise<CustomNameMapping[]>;
-  clearCustomNameMappings(): Promise<void>;
-  getCustomNameByUpc(upcCode: string): Promise<string | undefined>;
+  // Custom name mappings (persisted, user-scoped)
+  addCustomNameMapping(mapping: InsertCustomNameMapping, userId?: string): Promise<CustomNameMapping>;
+  getCustomNameMappings(userId?: string): Promise<CustomNameMapping[]>;
+  clearCustomNameMappings(userId?: string): Promise<void>;
+  getCustomNameByUpc(upcCode: string, userId?: string): Promise<string | undefined>;
+
+  // Price compare sessions (persisted, user-scoped)
+  savePriceCompareSession(userId: string, fileName: string, rowsJson: string): Promise<PriceCompareSession>;
+  getPriceCompareSession(userId: string): Promise<PriceCompareSession | undefined>;
 }
 
 // ── DatabaseStorage ───────────────────────────────────────────────────────────
-// Uses the standard postgres.js driver — works with Replit's PostgreSQL.
 
 export class DatabaseStorage implements IStorage {
   private db: ReturnType<typeof drizzle>;
-  private users = new Map<string, User>();
 
   constructor(databaseUrl: string) {
     const client = postgres(databaseUrl, { max: 10 });
     this.db = drizzle(client);
   }
 
-  // ── Users (in-memory, not persisted — unused in practice) ─────────────────
-  async getUser(id: string): Promise<User | undefined> {
-    return this.users.get(id);
-  }
-  async getUserByUsername(username: string): Promise<User | undefined> {
-    return Array.from(this.users.values()).find(u => u.username === username);
-  }
-  async createUser(insertUser: InsertUser): Promise<User> {
-    const id = randomUUID();
-    const user: User = { ...insertUser, id };
-    this.users.set(id, user);
-    return user;
-  }
-
-  // ── Liquor records (database) ──────────────────────────────────────────────
+  // ── Liquor records ─────────────────────────────────────────────────────────
 
   async createLiquorRecord(record: InsertLiquorRecord): Promise<LiquorRecord> {
     const result = await this.db.insert(liquorRecords).values(record).returning();
@@ -160,7 +144,7 @@ export class DatabaseStorage implements IStorage {
     return { results, totalFound: results.length };
   }
 
-  // ── Scanned items (database) ───────────────────────────────────────────────
+  // ── Scanned items ──────────────────────────────────────────────────────────
 
   async addScannedItem(insertItem: InsertScannedItem): Promise<ScannedItem> {
     const result = await this.db.insert(scannedItems).values(insertItem).returning();
@@ -189,12 +173,18 @@ export class DatabaseStorage implements IStorage {
     return r.length > 0;
   }
 
-  // ── Sessions (database) ────────────────────────────────────────────────────
+  // ── Scan sessions ──────────────────────────────────────────────────────────
 
-  async createSession(insertSession: InsertSession): Promise<Session> {
-    await this.db.update(sessions).set({ isActive: 0 });
+  async createSession(insertSession: InsertSession, userId?: string): Promise<Session> {
+    // Deactivate existing sessions for this user
+    if (userId) {
+      await this.db.update(sessions).set({ isActive: 0 }).where(eq(sessions.userId, userId));
+    } else {
+      await this.db.update(sessions).set({ isActive: 0 });
+    }
     const result = await this.db.insert(sessions).values({
       name: insertSession.name,
+      userId: userId ?? null,
       itemCount: insertSession.itemCount ?? 0,
       isActive: 1,
     }).returning();
@@ -206,8 +196,13 @@ export class DatabaseStorage implements IStorage {
     return r[0];
   }
 
-  async getSessions(): Promise<Session[]> {
-    return this.db.select().from(sessions).orderBy(sql`${sessions.updatedAt} desc`);
+  async getSessions(userId?: string): Promise<Session[]> {
+    if (userId) {
+      return this.db.select().from(sessions)
+        .where(eq(sessions.userId, userId))
+        .orderBy(desc(sessions.updatedAt));
+    }
+    return this.db.select().from(sessions).orderBy(desc(sessions.updatedAt));
   }
 
   async updateSessionItemCount(sessionId: string, count: number): Promise<void> {
@@ -222,68 +217,112 @@ export class DatabaseStorage implements IStorage {
     return r.length > 0;
   }
 
-  async getActiveSession(): Promise<Session | undefined> {
+  async getActiveSession(userId?: string): Promise<Session | undefined> {
+    const conditions = userId
+      ? and(eq(sessions.isActive, 1), eq(sessions.userId, userId))
+      : eq(sessions.isActive, 1);
     const r = await this.db.select().from(sessions)
-      .where(eq(sessions.isActive, 1))
-      .orderBy(sql`${sessions.updatedAt} desc`)
+      .where(conditions)
+      .orderBy(desc(sessions.updatedAt))
       .limit(1);
     return r[0];
   }
 
   async setActiveSession(sessionId: string): Promise<void> {
-    await this.db.update(sessions).set({ isActive: 0 });
+    const session = await this.getSession(sessionId);
+    if (session?.userId) {
+      await this.db.update(sessions).set({ isActive: 0 }).where(eq(sessions.userId, session.userId));
+    } else {
+      await this.db.update(sessions).set({ isActive: 0 });
+    }
     await this.db.update(sessions)
       .set({ isActive: 1, updatedAt: new Date() })
       .where(eq(sessions.id, sessionId));
   }
 
-  // ── Custom name mappings (database) ────────────────────────────────────────
+  // ── Custom name mappings ───────────────────────────────────────────────────
 
-  async addCustomNameMapping(insertMapping: InsertCustomNameMapping): Promise<CustomNameMapping> {
-    const r = await this.db.insert(customNameMappings).values(insertMapping).returning();
+  async addCustomNameMapping(insertMapping: InsertCustomNameMapping, userId?: string): Promise<CustomNameMapping> {
+    const r = await this.db.insert(customNameMappings).values({
+      ...insertMapping,
+      userId: userId ?? null,
+    }).returning();
     return r[0];
   }
 
-  async getCustomNameMappings(): Promise<CustomNameMapping[]> {
+  async getCustomNameMappings(userId?: string): Promise<CustomNameMapping[]> {
+    if (userId) {
+      return this.db.select().from(customNameMappings).where(eq(customNameMappings.userId, userId));
+    }
     return this.db.select().from(customNameMappings);
   }
 
-  async clearCustomNameMappings(): Promise<void> {
-    await this.db.delete(customNameMappings);
+  async clearCustomNameMappings(userId?: string): Promise<void> {
+    if (userId) {
+      await this.db.delete(customNameMappings).where(eq(customNameMappings.userId, userId));
+    } else {
+      await this.db.delete(customNameMappings);
+    }
   }
 
-  async getCustomNameByUpc(upcCode: string): Promise<string | undefined> {
+  async getCustomNameByUpc(upcCode: string, userId?: string): Promise<string | undefined> {
     const norm = normalizeUpc(upcCode);
-    const all = await this.db.select().from(customNameMappings).where(
-      or(
-        eq(customNameMappings.upcCode, upcCode),
-        sql`ltrim(${customNameMappings.upcCode}, '0') = ${norm}`,
-      )
-    );
+    const conditions = userId
+      ? and(
+          eq(customNameMappings.userId, userId),
+          or(
+            eq(customNameMappings.upcCode, upcCode),
+            sql`ltrim(${customNameMappings.upcCode}, '0') = ${norm}`,
+          )
+        )
+      : or(
+          eq(customNameMappings.upcCode, upcCode),
+          sql`ltrim(${customNameMappings.upcCode}, '0') = ${norm}`,
+        );
+    const all = await this.db.select().from(customNameMappings).where(conditions);
     return all[0]?.customName;
+  }
+
+  // ── Price compare sessions ─────────────────────────────────────────────────
+
+  async savePriceCompareSession(userId: string, fileName: string, rowsJson: string): Promise<PriceCompareSession> {
+    // Upsert: one saved session per user (replace existing)
+    const existing = await this.db.select({ id: priceCompareSessions.id })
+      .from(priceCompareSessions)
+      .where(eq(priceCompareSessions.userId, userId))
+      .limit(1);
+
+    if (existing.length > 0) {
+      const r = await this.db.update(priceCompareSessions)
+        .set({ fileName, rowsJson, updatedAt: new Date() })
+        .where(eq(priceCompareSessions.userId, userId))
+        .returning();
+      return r[0];
+    }
+
+    const r = await this.db.insert(priceCompareSessions)
+      .values({ userId, fileName, rowsJson })
+      .returning();
+    return r[0];
+  }
+
+  async getPriceCompareSession(userId: string): Promise<PriceCompareSession | undefined> {
+    const r = await this.db.select().from(priceCompareSessions)
+      .where(eq(priceCompareSessions.userId, userId))
+      .limit(1);
+    return r[0];
   }
 }
 
-// ── MemStorage (fallback — no DATABASE_URL) ───────────────────────────────────
+// ── MemStorage (fallback) ─────────────────────────────────────────────────────
 
 export class MemStorage implements IStorage {
-  private users = new Map<string, User>();
   private liquorRecordsMap = new Map<string, LiquorRecord>();
   private scannedItemsMap = new Map<string, ScannedItem>();
   private sessionsMap = new Map<string, Session>();
   private customNameMappingsMap = new Map<string, CustomNameMapping>();
+  private priceCompareMap = new Map<string, PriceCompareSession>();
   private activeSessionId: string | null = null;
-
-  async getUser(id: string): Promise<User | undefined> { return this.users.get(id); }
-  async getUserByUsername(u: string): Promise<User | undefined> {
-    return Array.from(this.users.values()).find(x => x.username === u);
-  }
-  async createUser(insertUser: InsertUser): Promise<User> {
-    const id = randomUUID();
-    const user: User = { ...insertUser, id };
-    this.users.set(id, user);
-    return user;
-  }
 
   async createLiquorRecord(insertRecord: InsertLiquorRecord): Promise<LiquorRecord> {
     const id = randomUUID();
@@ -351,8 +390,7 @@ export class MemStorage implements IStorage {
   async addScannedItem(insertItem: InsertScannedItem): Promise<ScannedItem> {
     const id = randomUUID();
     const item: ScannedItem = {
-      id,
-      sessionId: insertItem.sessionId,
+      id, sessionId: insertItem.sessionId,
       liquorRecordId: insertItem.liquorRecordId ?? null,
       scannedBarcode: insertItem.scannedBarcode,
       scannedAt: insertItem.scannedAt,
@@ -368,7 +406,7 @@ export class MemStorage implements IStorage {
   }
 
   async clearScannedItems(sessionId: string): Promise<void> {
-    for (const [id, item] of this.scannedItemsMap)
+    for (const [id, item] of Array.from(this.scannedItemsMap.entries()))
       if (item.sessionId === sessionId) this.scannedItemsMap.delete(id);
   }
 
@@ -381,13 +419,14 @@ export class MemStorage implements IStorage {
     return true;
   }
 
-  async createSession(insertSession: InsertSession): Promise<Session> {
+  async createSession(insertSession: InsertSession, userId?: string): Promise<Session> {
     const id = randomUUID();
     const session: Session = {
       id, name: insertSession.name,
+      userId: userId ?? null,
       createdAt: new Date(), updatedAt: new Date(),
       itemCount: insertSession.itemCount ?? 0,
-      isActive: insertSession.isActive ?? 1,
+      isActive: 1,
     };
     this.sessionsMap.set(id, session);
     this.activeSessionId = id;
@@ -396,10 +435,10 @@ export class MemStorage implements IStorage {
 
   async getSession(sessionId: string): Promise<Session | undefined> { return this.sessionsMap.get(sessionId); }
 
-  async getSessions(): Promise<Session[]> {
-    return Array.from(this.sessionsMap.values()).sort((a, b) =>
-      new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
-    );
+  async getSessions(userId?: string): Promise<Session[]> {
+    const all = Array.from(this.sessionsMap.values());
+    const filtered = userId ? all.filter(s => s.userId === userId) : all;
+    return filtered.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
   }
 
   async updateSessionItemCount(sessionId: string, count: number): Promise<void> {
@@ -414,39 +453,69 @@ export class MemStorage implements IStorage {
     return deleted;
   }
 
-  async getActiveSession(): Promise<Session | undefined> {
-    return this.activeSessionId ? this.sessionsMap.get(this.activeSessionId) : undefined;
+  async getActiveSession(userId?: string): Promise<Session | undefined> {
+    if (!this.activeSessionId) return undefined;
+    const s = this.sessionsMap.get(this.activeSessionId);
+    if (userId && s?.userId !== userId) return undefined;
+    return s;
   }
 
   async setActiveSession(sessionId: string): Promise<void> {
     if (this.sessionsMap.has(sessionId)) this.activeSessionId = sessionId;
   }
 
-  async addCustomNameMapping(insertMapping: InsertCustomNameMapping): Promise<CustomNameMapping> {
+  async addCustomNameMapping(insertMapping: InsertCustomNameMapping, userId?: string): Promise<CustomNameMapping> {
     const id = randomUUID();
     const mapping: CustomNameMapping = {
       id, upcCode: insertMapping.upcCode,
+      userId: userId ?? null,
       customName: insertMapping.customName, uploadedAt: new Date(),
     };
     this.customNameMappingsMap.set(id, mapping);
     return mapping;
   }
 
-  async getCustomNameMappings(): Promise<CustomNameMapping[]> {
-    return Array.from(this.customNameMappingsMap.values());
+  async getCustomNameMappings(userId?: string): Promise<CustomNameMapping[]> {
+    const all = Array.from(this.customNameMappingsMap.values());
+    return userId ? all.filter(m => m.userId === userId) : all;
   }
 
-  async clearCustomNameMappings(): Promise<void> { this.customNameMappingsMap.clear(); }
+  async clearCustomNameMappings(userId?: string): Promise<void> {
+    if (userId) {
+      for (const [id, m] of Array.from(this.customNameMappingsMap.entries()))
+        if (m.userId === userId) this.customNameMappingsMap.delete(id);
+    } else {
+      this.customNameMappingsMap.clear();
+    }
+  }
 
-  async getCustomNameByUpc(upcCode: string): Promise<string | undefined> {
+  async getCustomNameByUpc(upcCode: string, userId?: string): Promise<string | undefined> {
     const norm = normalizeUpc(upcCode);
-    for (const m of this.customNameMappingsMap.values())
+    const all = await this.getCustomNameMappings(userId);
+    for (const m of all)
       if (m.upcCode === upcCode || normalizeUpc(m.upcCode) === norm) return m.customName;
     return undefined;
   }
+
+  async savePriceCompareSession(userId: string, fileName: string, rowsJson: string): Promise<PriceCompareSession> {
+    const existing = this.priceCompareMap.get(userId);
+    if (existing) {
+      const updated = { ...existing, fileName, rowsJson, updatedAt: new Date() };
+      this.priceCompareMap.set(userId, updated);
+      return updated;
+    }
+    const id = randomUUID();
+    const s: PriceCompareSession = { id, userId, fileName, rowsJson, createdAt: new Date(), updatedAt: new Date() };
+    this.priceCompareMap.set(userId, s);
+    return s;
+  }
+
+  async getPriceCompareSession(userId: string): Promise<PriceCompareSession | undefined> {
+    return this.priceCompareMap.get(userId);
+  }
 }
 
-// ── Singleton for the Express server ──────────────────────────────────────────
+// ── Singleton ──────────────────────────────────────────────────────────────────
 export const storage: IStorage = process.env.DATABASE_URL
   ? new DatabaseStorage(process.env.DATABASE_URL)
   : new MemStorage();

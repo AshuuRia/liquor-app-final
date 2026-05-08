@@ -240,7 +240,140 @@ Note: the normal `npm run dev` command uses Express + Neon Postgres (good for ra
 
 ## User preferences
 
-_Populate as you build_
+- Replit Auth (Google/GitHub/Apple/email) is used for login — all user data is scoped by userId
+- The app requires login to use any features (landing page shown when signed out)
+- Price compare sessions auto-save to the DB every 2 seconds after changes so users can resume from any device
+
+---
+
+## Google OAuth on Cloudflare Pages (Production Auth)
+
+The **dev environment on Replit** uses Replit Auth (OIDC), which supports Google, GitHub, Apple, and email out of the box.
+
+For the **Cloudflare Pages production deployment**, Replit Auth cannot be used (it requires a Replit environment). You have two good options:
+
+### Option A — Clerk (recommended, easiest)
+
+Clerk is a full authentication SaaS that works in Cloudflare Workers with zero server-side sessions.
+
+1. **Create a free Clerk account** at [clerk.com](https://clerk.com)
+2. **Create a new application** — enable Google as a social provider under Social Connections
+3. **Get your API keys** from Dashboard → API Keys:
+   - `NEXT_PUBLIC_PUBLISHABLE_KEY` (frontend)
+   - `CLERK_SECRET_KEY` (backend)
+4. **Add Clerk to the Cloudflare Pages project**:
+   - Go to your Pages project → Settings → Environment Variables
+   - Add `CLERK_SECRET_KEY` and `CLERK_PUBLISHABLE_KEY`
+5. **Install Clerk SDK** in the project:
+   ```bash
+   npm install @clerk/clerk-js @clerk/backend
+   ```
+6. **Frontend** — initialize Clerk in `client/src/main.tsx`:
+   ```typescript
+   import { Clerk } from "@clerk/clerk-js";
+   const clerk = new Clerk(import.meta.env.VITE_CLERK_PUBLISHABLE_KEY);
+   await clerk.load();
+   ```
+7. **Backend** — verify the session token in your Hono Pages Function (`functions/api/[[path]].ts`):
+   ```typescript
+   import { createClerkClient } from "@clerk/backend";
+   const clerkClient = createClerkClient({ secretKey: env.CLERK_SECRET_KEY });
+   const token = c.req.header("Authorization")?.replace("Bearer ", "");
+   const { sub: userId } = await clerkClient.verifyToken(token);
+   ```
+8. The `userId` from `sub` is stable — use it as the key for all user-scoped data in D1
+
+---
+
+### Option B — Google OAuth directly (manual)
+
+If you prefer no third-party auth service:
+
+1. **Create a Google OAuth app** at [console.cloud.google.com](https://console.cloud.google.com)
+   - Go to APIs & Services → Credentials → Create Credentials → OAuth 2.0 Client ID
+   - Application type: Web application
+   - Authorized redirect URIs: `https://your-project.pages.dev/api/callback`
+2. **Copy** your Client ID and Client Secret
+3. **Add to Cloudflare Pages** environment variables:
+   - `GOOGLE_CLIENT_ID`
+   - `GOOGLE_CLIENT_SECRET`
+   - `SESSION_SECRET` (any random 32+ char string)
+4. **Add KV namespace** for session storage (Cloudflare → Workers & Pages → KV → Create):
+   - Go to your Pages project → Settings → Functions → KV namespace bindings
+   - Variable name: `SESSIONS`, select your KV namespace
+5. **Implement the auth flow** in `functions/api/[[path]].ts` (Hono):
+   ```typescript
+   // GET /api/login — redirect to Google
+   app.get("/api/login", c => {
+     const url = `https://accounts.google.com/o/oauth2/v2/auth?` +
+       `client_id=${c.env.GOOGLE_CLIENT_ID}&` +
+       `redirect_uri=${encodeURIComponent("https://your-project.pages.dev/api/callback")}&` +
+       `response_type=code&scope=openid+email+profile`;
+     return c.redirect(url);
+   });
+
+   // GET /api/callback — exchange code for user info, set session cookie
+   app.get("/api/callback", async c => {
+     const code = c.req.query("code");
+     const tokenRes = await fetch("https://oauth2.googleapis.com/token", {
+       method: "POST",
+       body: new URLSearchParams({
+         code, client_id: c.env.GOOGLE_CLIENT_ID,
+         client_secret: c.env.GOOGLE_CLIENT_SECRET,
+         redirect_uri: "https://your-project.pages.dev/api/callback",
+         grant_type: "authorization_code",
+       }),
+     });
+     const { id_token } = await tokenRes.json();
+     // Decode the JWT (no verification needed — Google signed it)
+     const payload = JSON.parse(atob(id_token.split(".")[1]));
+     const userId = payload.sub;
+     // Store session in KV
+     const sessionId = crypto.randomUUID();
+     await c.env.SESSIONS.put(sessionId, JSON.stringify({ userId, email: payload.email }), { expirationTtl: 604800 });
+     return new Response(null, { status: 302, headers: {
+       Location: "/",
+       "Set-Cookie": `sid=${sessionId}; HttpOnly; Secure; SameSite=Lax; Max-Age=604800; Path=/`,
+     }});
+   });
+   ```
+6. **Middleware** — read `sid` cookie, look up session in KV, attach userId to context
+7. **Data** — use the same D1 tables (`sessions`, `price_compare_sessions`, etc.) with the `user_id` column
+
+---
+
+### D1 Schema for User-Scoped Tables (prod)
+
+Apply this migration to your D1 database after adding user auth:
+
+```sql
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS user_id TEXT;
+ALTER TABLE custom_name_mappings ADD COLUMN IF NOT EXISTS user_id TEXT;
+
+CREATE TABLE IF NOT EXISTS auth_users (
+  id TEXT PRIMARY KEY,
+  email TEXT UNIQUE,
+  first_name TEXT,
+  last_name TEXT,
+  profile_image_url TEXT,
+  created_at TEXT DEFAULT (datetime('now')),
+  updated_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS price_compare_sessions (
+  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+  user_id TEXT NOT NULL,
+  file_name TEXT NOT NULL,
+  rows_json TEXT NOT NULL,
+  created_at TEXT DEFAULT (datetime('now')),
+  updated_at TEXT DEFAULT (datetime('now'))
+);
+```
+
+Run with:
+```bash
+npx wrangler d1 execute liquor-inventory-db --file=migrations/d1/0002_user_scoped.sql
+```
 
 ## Gotchas
 

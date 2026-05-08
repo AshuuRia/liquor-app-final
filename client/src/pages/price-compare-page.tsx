@@ -1,5 +1,5 @@
-import { useState, useRef, useCallback } from "react";
-import { Link, useLocation } from "wouter";
+import { useState, useRef, useCallback, useEffect } from "react";
+import { Link } from "wouter";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -10,7 +10,8 @@ import { BarcodeScanner } from "@/components/barcode-scanner";
 import {
   ArrowLeft, Upload, TrendingUp, TrendingDown,
   AlertCircle, CheckCircle, Download, RefreshCw, ChevronUp, ChevronDown,
-  AlertTriangle, HelpCircle, Scan, FileText, Trash2, Package, XCircle
+  AlertTriangle, HelpCircle, Scan, FileText, Trash2, Package, XCircle,
+  Cloud, CloudOff, Save
 } from "lucide-react";
 import type { LiquorRecord } from "@shared/schema";
 
@@ -78,12 +79,35 @@ function downloadCsv(content: string, filename: string) {
   URL.revokeObjectURL(url);
 }
 
-// Normalise a barcode so UPC-A / EAN-13 / GTIN-14 all resolve the same way
 function normalizeBarcode(raw: string): string {
   const s = raw.replace(/\D/g, '');
   if (s.length === 14 && s.startsWith('00')) return s.slice(2);
   if (s.length === 13 && s.startsWith('0'))  return s.slice(1);
   return s || raw;
+}
+
+// ── Cloud save/load helpers ───────────────────────────────────────────────────
+
+async function loadCloudSession(): Promise<{ fileName: string; rows: ComparisonRow[] } | null> {
+  try {
+    const res = await fetch("/api/price-compare/session", { credentials: "include" });
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (!data.session?.rowsJson) return null;
+    const rows = JSON.parse(data.session.rowsJson) as ComparisonRow[];
+    return { fileName: data.session.fileName, rows };
+  } catch {
+    return null;
+  }
+}
+
+async function saveCloudSession(fileName: string, rows: ComparisonRow[]): Promise<void> {
+  await fetch("/api/price-compare/session", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify({ fileName, rowsJson: JSON.stringify(rows) }),
+  });
 }
 
 // ── Main component ────────────────────────────────────────────────────────────
@@ -92,30 +116,63 @@ export default function PriceComparePage() {
   const { toast } = useToast();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Mode
   const [pageMode, setPageMode] = useState<PageMode>("csv");
+  const [rows, setRows]         = useState<ComparisonRow[]>([]);
+  const [loading, setLoading]   = useState(false);
+  const [dragOver, setDragOver] = useState(false);
+  const [fileName, setFileName] = useState("");
+  const [filter, setFilter]     = useState<Filter>("all");
+  const [sortKey, setSortKey]   = useState<SortKey>("name");
+  const [sortDir, setSortDir]   = useState<SortDir>("asc");
+  const [search, setSearch]     = useState("");
+  const [dbEmpty, setDbEmpty]   = useState(false);
 
-  // ── CSV upload state ─────────────────────────────────────────────────────────
-  const [rows, setRows]           = useState<ComparisonRow[]>([]);
-  const [loading, setLoading]     = useState(false);
-  const [dragOver, setDragOver]   = useState(false);
-  const [fileName, setFileName]   = useState("");
-  const [filter, setFilter]       = useState<Filter>("all");
-  const [sortKey, setSortKey]     = useState<SortKey>("name");
-  const [sortDir, setSortDir]     = useState<SortDir>("asc");
-  const [search, setSearch]       = useState("");
-  const [dbEmpty, setDbEmpty]     = useState(false);
-
-  // CSV disambiguation
   const [disambigRow, setDisambigRow] = useState<{ origIdx: number; row: ComparisonRow } | null>(null);
 
-  // ── Scan mode state ──────────────────────────────────────────────────────────
-  // Indices into `rows` that have been pulled by scanning
   const [scannedIndices, setScannedIndices] = useState<number[]>([]);
   const [scannerActive, setScannerActive]   = useState(false);
   const [scanSearch, setScanSearch]         = useState("");
 
-  // ── File handling ────────────────────────────────────────────────────────────
+  const [cloudSaving, setCloudSaving] = useState(false);
+  const [cloudSaved, setCloudSaved]   = useState(false);
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // ── Load saved session on mount ───────────────────────────────────────────
+
+  useEffect(() => {
+    loadCloudSession().then(saved => {
+      if (saved && saved.rows.length > 0) {
+        setRows(saved.rows);
+        setFileName(saved.fileName);
+        setCloudSaved(true);
+        toast({
+          title: "Session restored",
+          description: `Loaded ${saved.rows.length} products from your last session.`,
+        });
+      }
+    });
+  }, []);
+
+  // ── Auto-save rows to cloud (debounced 2 s) ────────────────────────────────
+
+  const scheduleCloudSave = useCallback((currentFileName: string, currentRows: ComparisonRow[]) => {
+    if (!currentFileName || currentRows.length === 0) return;
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    setCloudSaved(false);
+    saveTimerRef.current = setTimeout(async () => {
+      setCloudSaving(true);
+      try {
+        await saveCloudSession(currentFileName, currentRows);
+        setCloudSaved(true);
+      } catch {
+        // silently ignore
+      } finally {
+        setCloudSaving(false);
+      }
+    }, 2000);
+  }, []);
+
+  // ── File handling ─────────────────────────────────────────────────────────
 
   const processFile = useCallback(async (file: File) => {
     if (!file.name.endsWith(".csv")) {
@@ -129,6 +186,7 @@ export default function PriceComparePage() {
       const res = await fetch("/api/compare-prices", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({ csvText }),
       });
       const data = await res.json();
@@ -137,7 +195,7 @@ export default function PriceComparePage() {
       if (data.dbEmpty) {
         setDbEmpty(true);
         setRows([]);
-        toast({ variant: "destructive", title: "Michigan database not loaded", description: "Go to the home page first to load the Michigan price book, then come back." });
+        toast({ variant: "destructive", title: "Michigan database not loaded", description: "Go to More → Refresh Data first, then come back." });
         return;
       }
 
@@ -150,8 +208,9 @@ export default function PriceComparePage() {
         customName:     r.name,
       }));
       setRows(hydrated);
-      setScannedIndices([]); // reset scan list when new CSV loaded
+      setScannedIndices([]);
       setFilter("all");
+      scheduleCloudSave(file.name, hydrated);
 
       const changed     = hydrated.filter(r => r.priceDiff !== null && r.priceDiff !== 0).length;
       const notFound    = hydrated.filter(r => !r.matched).length;
@@ -166,7 +225,7 @@ export default function PriceComparePage() {
     } finally {
       setLoading(false);
     }
-  }, [toast]);
+  }, [toast, scheduleCloudSave]);
 
   const onFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
@@ -180,17 +239,25 @@ export default function PriceComparePage() {
     if (f) processFile(f);
   };
 
-  // ── Row editing ──────────────────────────────────────────────────────────────
+  // ── Row editing ───────────────────────────────────────────────────────────
 
   const updateRow = (idx: number, patch: Partial<ComparisonRow>) => {
-    setRows(prev => prev.map((r, i) => i === idx ? { ...r, ...patch } : r));
+    setRows(prev => {
+      const next = prev.map((r, i) => i === idx ? { ...r, ...patch } : r);
+      scheduleCloudSave(fileName, next);
+      return next;
+    });
   };
 
   const resetAllToMichigan = (targetRows: { origIdx: number }[]) => {
     const idxSet = new Set(targetRows.map(x => x.origIdx));
-    setRows(prev => prev.map((r, i) =>
-      idxSet.has(i) ? { ...r, newPrice: r.michiganPrice ?? r.registerPrice } : r
-    ));
+    setRows(prev => {
+      const next = prev.map((r, i) =>
+        idxSet.has(i) ? { ...r, newPrice: r.michiganPrice ?? r.registerPrice } : r
+      );
+      scheduleCloudSave(fileName, next);
+      return next;
+    });
     toast({ title: "Prices reset", description: "New prices set to Michigan price." });
   };
 
@@ -212,20 +279,21 @@ export default function PriceComparePage() {
     toast({ title: "Match applied", description: `Linked to ${match.brandName} ${match.bottleSize}` });
   };
 
-  // ── Sorting ──────────────────────────────────────────────────────────────────
+  // ── Sorting ───────────────────────────────────────────────────────────────
 
   const toggleSort = (key: SortKey) => {
     if (sortKey === key) setSortDir(d => d === "asc" ? "desc" : "asc");
     else { setSortKey(key); setSortDir("asc"); }
   };
 
-  // ── Derived data ─────────────────────────────────────────────────────────────
+  // ── Derived data ──────────────────────────────────────────────────────────
 
   const totalIncreased = rows.filter(r => r.priceDiff !== null && r.priceDiff > 0).length;
   const totalDecreased = rows.filter(r => r.priceDiff !== null && r.priceDiff < 0).length;
   const totalSame      = rows.filter(r => r.priceDiff === 0).length;
   const totalNotFound  = rows.filter(r => !r.matched).length;
   const totalAmbiguous = rows.filter(r => r.multipleMatches && !r.resolvedByUser).length;
+  const totalChanged   = rows.filter(r => Math.round((r.newPrice - r.registerPrice) * 100) !== 0).length;
 
   const applyFilters = (source: { row: ComparisonRow; origIdx: number }[]) =>
     source
@@ -240,7 +308,7 @@ export default function PriceComparePage() {
       .filter(({ row: r }) => {
         if (!search) return true;
         const q = search.toLowerCase();
-        return r.name.toLowerCase().includes(q) || r.upc.includes(q);
+        return r.name.toLowerCase().includes(q) || r.upc.includes(q) || (r.michiganLiquorCode || '').includes(q);
       })
       .sort((a, b) => {
         let av: any, bv: any;
@@ -257,17 +325,14 @@ export default function PriceComparePage() {
   const allRowsWithIdx = rows.map((row, origIdx) => ({ row, origIdx }));
   const visible = applyFilters(allRowsWithIdx);
 
-  // ── Scan mode logic ──────────────────────────────────────────────────────────
+  // ── Scan mode ─────────────────────────────────────────────────────────────
 
   const handleBarcodeScan = useCallback((barcode: string) => {
     if (rows.length === 0) {
       toast({ variant: "destructive", title: "No CSV loaded", description: "Upload your register CSV first, then scan bottles." });
       return;
     }
-
     const norm = normalizeBarcode(barcode);
-
-    // Find matching row(s) in the CSV data
     const matchingIndices = rows
       .map((r, i) => ({ r, i }))
       .filter(({ r }) => {
@@ -277,22 +342,14 @@ export default function PriceComparePage() {
       .map(({ i }) => i);
 
     if (matchingIndices.length === 0) {
-      toast({
-        variant: "destructive",
-        title: "Not in your CSV",
-        description: `UPC ${barcode} wasn't found in your uploaded register file.`,
-      });
+      toast({ variant: "destructive", title: "Not in your CSV", description: `UPC ${barcode} wasn't found in your uploaded register file.` });
       return;
     }
-
     const newIdx = matchingIndices[0];
-
-    // Don't add duplicates
     if (scannedIndices.includes(newIdx)) {
       toast({ title: "Already in scan list", description: `${rows[newIdx].name} is already on the list.` });
       return;
     }
-
     setScannedIndices(prev => [newIdx, ...prev]);
     toast({ title: "Added", description: rows[newIdx].name });
   }, [rows, scannedIndices, toast]);
@@ -301,7 +358,6 @@ export default function PriceComparePage() {
     setScannedIndices(prev => prev.filter(i => i !== origIdx));
   };
 
-  // Scanned rows with optional search within scan list
   const scannedRowsWithIdx = scannedIndices
     .map(i => ({ row: rows[i], origIdx: i }))
     .filter(({ row: r }) => {
@@ -314,7 +370,7 @@ export default function PriceComparePage() {
   const scanDecreased = scannedIndices.filter(i => rows[i].priceDiff !== null && rows[i].priceDiff! < 0).length;
   const scanAmbiguous = scannedIndices.filter(i => rows[i].multipleMatches && !rows[i].resolvedByUser).length;
 
-  // ── Export helpers ───────────────────────────────────────────────────────────
+  // ── Export helpers ────────────────────────────────────────────────────────
 
   const doExport = (sourceRows: ComparisonRow[], customNames: boolean, filePrefix: string) => {
     if (sourceRows.length === 0) return;
@@ -324,7 +380,16 @@ export default function PriceComparePage() {
     toast({ title: "Exported!", description: `Downloaded ${sourceRows.length} products.` });
   };
 
-  // ── Sub-components ───────────────────────────────────────────────────────────
+  const exportChangedOnly = (customNames: boolean, filePrefix: string) => {
+    const changed = rows.filter(r => Math.round((r.newPrice - r.registerPrice) * 100) !== 0);
+    if (changed.length === 0) {
+      toast({ title: "No price changes", description: "All new prices match your register prices." });
+      return;
+    }
+    doExport(changed, customNames, `${filePrefix}_changed`);
+  };
+
+  // ── Sub-components ────────────────────────────────────────────────────────
 
   const SortIcon = ({ k }: { k: SortKey }) =>
     sortKey !== k ? null :
@@ -356,7 +421,6 @@ export default function PriceComparePage() {
     );
   };
 
-  // Shared comparison table renderer
   const ComparisonTable = ({
     rowsWithIdx,
     emptyLabel = "No products match this filter.",
@@ -375,6 +439,7 @@ export default function PriceComparePage() {
             <tr>
               <Th label="Product name"  k="name"          className="min-w-[200px]" />
               <th className="px-3 py-3 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wide whitespace-nowrap">UPC</th>
+              <th className="px-3 py-3 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wide whitespace-nowrap">Liq. Code</th>
               <Th label="Your price"    k="registerPrice" className="text-right" />
               <Th label="MI price"      k="michiganPrice" className="text-right" />
               <Th label="Change"        k="priceDiff" />
@@ -386,7 +451,7 @@ export default function PriceComparePage() {
           <tbody className="divide-y divide-border">
             {rowsWithIdx.length === 0 && (
               <tr>
-                <td colSpan={showRemove ? 8 : 7} className="px-4 py-8 text-center text-muted-foreground">
+                <td colSpan={showRemove ? 9 : 8} className="px-4 py-8 text-center text-muted-foreground">
                   {emptyLabel}
                 </td>
               </tr>
@@ -438,6 +503,10 @@ export default function PriceComparePage() {
                   </td>
                   {/* UPC */}
                   <td className="px-3 py-2.5 font-mono text-xs text-muted-foreground whitespace-nowrap">{row.upc}</td>
+                  {/* Liquor Code */}
+                  <td className="px-3 py-2.5 font-mono text-xs text-muted-foreground whitespace-nowrap">
+                    {row.michiganLiquorCode || row.liquorCode || <span className="text-muted-foreground/40">—</span>}
+                  </td>
                   {/* Your price */}
                   <td className="px-3 py-2.5 text-right font-medium tabular-nums">${row.registerPrice.toFixed(2)}</td>
                   {/* MI price */}
@@ -490,7 +559,7 @@ export default function PriceComparePage() {
                         id={`override-${origIdx}`}
                         checked={row.useCustomName}
                         onChange={e => updateRow(origIdx, { useCustomName: e.target.checked })}
-                        className="h-3.5 w-3.5 rounded border-border accent-primary"
+                        className="rounded border-border"
                       />
                       {row.useCustomName ? (
                         <input
@@ -528,7 +597,30 @@ export default function PriceComparePage() {
     </div>
   );
 
-  // ── Render ────────────────────────────────────────────────────────────────────
+  // ── Cloud status indicator ────────────────────────────────────────────────
+
+  const CloudStatus = () => {
+    if (rows.length === 0) return null;
+    if (cloudSaving) return (
+      <span className="flex items-center gap-1 text-xs text-muted-foreground">
+        <Save className="h-3 w-3 animate-pulse" /> Saving…
+      </span>
+    );
+    if (cloudSaved) return (
+      <span className="flex items-center gap-1 text-xs text-green-600">
+        <Cloud className="h-3 w-3" /> Saved
+      </span>
+    );
+    return (
+      <span className="flex items-center gap-1 text-xs text-muted-foreground">
+        <CloudOff className="h-3 w-3" /> Unsaved
+      </span>
+    );
+  };
+
+  // ── Render ────────────────────────────────────────────────────────────────
+
+  const fileBase = fileName.replace(/\.csv$/i, "");
 
   return (
     <div className="min-h-screen bg-background flex flex-col pb-16">
@@ -544,7 +636,10 @@ export default function PriceComparePage() {
               <TrendingUp className="h-5 w-5" />
             </div>
             <div>
-              <h1 className="text-xl font-bold text-foreground">Price Comparison</h1>
+              <div className="flex items-center gap-2">
+                <h1 className="text-xl font-bold text-foreground">Price Comparison</h1>
+                <CloudStatus />
+              </div>
               <p className="text-xs text-muted-foreground">Compare your register prices against Michigan's current price book</p>
             </div>
           </div>
@@ -585,10 +680,13 @@ export default function PriceComparePage() {
                 <Button variant="outline" size="sm" onClick={() => resetAllToMichigan(allRowsWithIdx)}>
                   <RefreshCw className="h-4 w-4 mr-1" /> Reset all to MI
                 </Button>
-                <Button variant="outline" size="sm" onClick={() => doExport(rows, false, fileName.replace(/\.csv$/i, ""))}>
-                  <Download className="h-4 w-4 mr-1" /> Export P-touch CSV
+                <Button variant="outline" size="sm" onClick={() => exportChangedOnly(false, fileBase)} data-testid="button-export-changed">
+                  <Download className="h-4 w-4 mr-1" /> Changed only ({totalChanged})
                 </Button>
-                <Button size="sm" onClick={() => doExport(rows, true, fileName.replace(/\.csv$/i, ""))}>
+                <Button variant="outline" size="sm" onClick={() => doExport(rows, false, fileBase)}>
+                  <Download className="h-4 w-4 mr-1" /> Export all
+                </Button>
+                <Button size="sm" onClick={() => doExport(rows, true, fileBase)}>
                   <Download className="h-4 w-4 mr-1" /> With Custom Names
                 </Button>
               </>
@@ -614,7 +712,7 @@ export default function PriceComparePage() {
 
       <main className="flex-1 max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 py-6 space-y-5">
 
-        {/* ── DB not loaded warning ──────────────────────────────────────────── */}
+        {/* DB not loaded warning */}
         {dbEmpty && (
           <div className="flex items-start gap-3 bg-red-50 border border-red-200 rounded-lg px-4 py-4 text-sm text-red-800">
             <AlertCircle className="h-5 w-5 mt-0.5 flex-shrink-0 text-red-500" />
@@ -628,7 +726,7 @@ export default function PriceComparePage() {
           </div>
         )}
 
-        {/* ── Upload zone (always visible) ──────────────────────────────────── */}
+        {/* Upload zone */}
         <div
           onDragOver={e => { e.preventDefault(); setDragOver(true); }}
           onDragLeave={() => setDragOver(false)}
@@ -662,9 +760,7 @@ export default function PriceComparePage() {
           </div>
         </div>
 
-        {/* ══════════════════════════════════════════════════════════════════════
-            FULL LIST MODE
-        ══════════════════════════════════════════════════════════════════════ */}
+        {/* ══════════════ FULL LIST MODE ══════════════ */}
         {pageMode === "csv" && rows.length > 0 && !loading && (
           <>
             {/* Summary strip */}
@@ -756,10 +852,10 @@ export default function PriceComparePage() {
               ))}
               <div className="ml-auto">
                 <Input
-                  placeholder="Search name or UPC…"
+                  placeholder="Search name, UPC, or liquor code…"
                   value={search}
                   onChange={e => setSearch(e.target.value)}
-                  className="h-8 w-52 text-sm"
+                  className="h-8 w-60 text-sm"
                 />
               </div>
             </div>
@@ -768,27 +864,26 @@ export default function PriceComparePage() {
             <ComparisonTable rowsWithIdx={visible} />
 
             {/* Footer */}
-            <div className="flex items-center justify-between text-xs text-muted-foreground px-1">
+            <div className="flex items-center justify-between text-xs text-muted-foreground px-1 flex-wrap gap-2">
               <span>Showing {visible.length} of {rows.length} products</span>
-              <div className="flex gap-3">
-                <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => doExport(rows, false, fileName.replace(/\.csv$/i, ""))}>
-                  <Download className="h-3 w-3 mr-1" /> P-touch CSV
+              <div className="flex gap-2 flex-wrap">
+                <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => exportChangedOnly(false, fileBase)}>
+                  <Download className="h-3 w-3 mr-1" /> Changed only ({totalChanged})
                 </Button>
-                <Button size="sm" className="h-7 text-xs" onClick={() => doExport(rows, true, fileName.replace(/\.csv$/i, ""))}>
-                  <Download className="h-3 w-3 mr-1" /> P-touch CSV (Custom Names)
+                <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => doExport(rows, false, fileBase)}>
+                  <Download className="h-3 w-3 mr-1" /> Export all
+                </Button>
+                <Button size="sm" className="h-7 text-xs" onClick={() => doExport(rows, true, fileBase)}>
+                  <Download className="h-3 w-3 mr-1" /> With Custom Names
                 </Button>
               </div>
             </div>
           </>
         )}
 
-        {/* ══════════════════════════════════════════════════════════════════════
-            SCAN MODE
-        ══════════════════════════════════════════════════════════════════════ */}
+        {/* ══════════════ SCAN MODE ══════════════ */}
         {pageMode === "scan" && (
           <div className="space-y-5">
-
-            {/* No CSV loaded prompt */}
             {rows.length === 0 && !loading && (
               <div className="flex items-start gap-3 bg-amber-50 border border-amber-200 rounded-lg px-4 py-4 text-sm text-amber-800">
                 <AlertCircle className="h-5 w-5 mt-0.5 flex-shrink-0 text-amber-500" />
@@ -799,10 +894,7 @@ export default function PriceComparePage() {
               </div>
             )}
 
-            {/* Scanner + stats */}
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
-
-              {/* Scanner */}
               <div className="lg:col-span-1">
                 <BarcodeScanner
                   onScan={handleBarcodeScan}
@@ -811,7 +903,6 @@ export default function PriceComparePage() {
                 />
               </div>
 
-              {/* Stats */}
               <div className="lg:col-span-2 space-y-3">
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
                   <Card>
@@ -861,12 +952,7 @@ export default function PriceComparePage() {
                       onChange={e => setScanSearch(e.target.value)}
                       className="h-8 w-52 text-sm"
                     />
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => setScannedIndices([])}
-                      data-testid="button-scan-clear"
-                    >
+                    <Button variant="outline" size="sm" onClick={() => setScannedIndices([])} data-testid="button-scan-clear">
                       <Trash2 className="h-4 w-4 mr-1" /> Clear list
                     </Button>
                   </div>
@@ -874,7 +960,6 @@ export default function PriceComparePage() {
               </div>
             </div>
 
-            {/* Scan list table */}
             {scannedIndices.length > 0 && (
               <>
                 <ComparisonTable
@@ -883,9 +968,9 @@ export default function PriceComparePage() {
                   showRemove
                   onRemove={removeFromScanList}
                 />
-                <div className="flex items-center justify-between text-xs text-muted-foreground px-1">
+                <div className="flex items-center justify-between text-xs text-muted-foreground px-1 flex-wrap gap-2">
                   <span>{scannedIndices.length} item{scannedIndices.length !== 1 ? "s" : ""} in scan list</span>
-                  <div className="flex gap-3">
+                  <div className="flex gap-2">
                     <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => doExport(scannedRowsWithIdx.map(x => x.row), false, "shelf_scan")}>
                       <Download className="h-3 w-3 mr-1" /> Export P-touch CSV
                     </Button>
@@ -897,7 +982,6 @@ export default function PriceComparePage() {
               </>
             )}
 
-            {/* Empty state */}
             {scannedIndices.length === 0 && rows.length > 0 && (
               <div className="flex flex-col items-center justify-center py-16 text-center text-muted-foreground gap-3">
                 <Scan className="h-12 w-12 opacity-30" />
@@ -909,7 +993,7 @@ export default function PriceComparePage() {
         )}
       </main>
 
-      {/* ── Disambiguation dialog ─────────────────────────────────────────────── */}
+      {/* Disambiguation dialog */}
       <Dialog open={!!disambigRow} onOpenChange={open => { if (!open) setDisambigRow(null); }}>
         <DialogContent className="max-w-lg">
           <DialogHeader>
@@ -955,22 +1039,15 @@ export default function PriceComparePage() {
                               {diff > 0 ? "+" : ""}{diff.toFixed(2)} vs yours
                             </p>
                           )}
-                          {diff === 0 && <p className="text-xs text-muted-foreground">Same as yours</p>}
                         </>
                       ) : (
-                        <p className="text-xs text-muted-foreground">No price</p>
+                        <p className="text-sm text-muted-foreground">No price</p>
                       )}
                     </div>
                   </div>
-                  {isCurrentMatch && <p className="text-xs text-primary mt-1.5 font-medium">✓ Currently selected</p>}
                 </button>
               );
             })}
-          </div>
-          <div className="pt-2 border-t border-border">
-            <Button variant="outline" className="w-full" onClick={() => setDisambigRow(null)}>
-              Cancel — keep current match
-            </Button>
           </div>
         </DialogContent>
       </Dialog>

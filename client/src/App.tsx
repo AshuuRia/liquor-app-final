@@ -9,12 +9,15 @@ import SearchPage from "@/pages/search-page";
 import SessionPage from "@/pages/session-page";
 import MorePage from "@/pages/more-page";
 import PriceComparePage from "@/pages/price-compare-page";
-import { ScanLine, Search, ListChecks, MoreHorizontal } from "lucide-react";
+import { ScanLine, Search, ListChecks, MoreHorizontal, ScanBarcode, LogOut, User } from "lucide-react";
+import { useAuth } from "@/hooks/use-auth";
+
+// ── Bottom navigation ─────────────────────────────────────────────────────────
 
 const TABS = [
-  { path: "/",        label: "Lookup",  Icon: ScanLine    },
-  { path: "/search",  label: "Search",  Icon: Search      },
-  { path: "/session", label: "Session", Icon: ListChecks  },
+  { path: "/",        label: "Lookup",  Icon: ScanLine      },
+  { path: "/search",  label: "Search",  Icon: Search        },
+  { path: "/session", label: "Session", Icon: ListChecks    },
   { path: "/more",    label: "More",    Icon: MoreHorizontal },
 ];
 
@@ -37,8 +40,10 @@ function BottomNav() {
   const sessionCount = useSessionItemCount();
 
   return (
-    <nav className="fixed bottom-0 left-0 right-0 z-50 bg-zinc-900 border-t border-zinc-800 flex"
-         style={{ paddingBottom: "env(safe-area-inset-bottom)" }}>
+    <nav
+      className="fixed bottom-0 left-0 right-0 z-50 bg-zinc-900 border-t border-zinc-800 flex"
+      style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
+    >
       {TABS.map(({ path, label, Icon }) => {
         const active = path === "/" ? location === "/" : location.startsWith(path);
         const isSession = path === "/session";
@@ -66,6 +71,8 @@ function BottomNav() {
   );
 }
 
+// ── Authenticated main app ────────────────────────────────────────────────────
+
 function Router() {
   return (
     <>
@@ -84,12 +91,117 @@ function Router() {
   );
 }
 
+// ── Landing page (shown when not logged in) ───────────────────────────────────
+
+function LandingPage() {
+  return (
+    <div className="min-h-screen bg-zinc-950 flex flex-col items-center justify-center px-6 text-center">
+      {/* Logo */}
+      <div className="mb-8 flex flex-col items-center gap-4">
+        <div className="bg-blue-600 rounded-2xl p-5 shadow-xl shadow-blue-900/40">
+          <ScanBarcode className="h-14 w-14 text-white stroke-[1.5]" />
+        </div>
+        <div>
+          <h1 className="text-3xl font-bold text-white tracking-tight">Michigan Liquor</h1>
+          <p className="text-zinc-400 text-sm mt-1">Inventory &amp; Pricing Tool</p>
+        </div>
+      </div>
+
+      {/* Feature list */}
+      <ul className="mb-10 space-y-3 text-left max-w-xs w-full">
+        {[
+          "Scan barcodes to build label sessions",
+          "Compare register prices to Michigan's price book",
+          "Generate Brother QL-820NWB shelf labels",
+          "Auto-save your work across all devices",
+        ].map((f) => (
+          <li key={f} className="flex items-center gap-3 text-sm text-zinc-300">
+            <span className="flex-shrink-0 h-5 w-5 rounded-full bg-blue-600/20 border border-blue-500/40 flex items-center justify-center">
+              <span className="h-1.5 w-1.5 rounded-full bg-blue-400" />
+            </span>
+            {f}
+          </li>
+        ))}
+      </ul>
+
+      {/* CTA */}
+      <a
+        href="/api/login"
+        data-testid="button-login"
+        className="inline-flex items-center gap-3 bg-blue-600 hover:bg-blue-500 active:bg-blue-700 text-white font-semibold px-8 py-4 rounded-2xl shadow-lg shadow-blue-900/40 transition-colors text-base"
+      >
+        <User className="h-5 w-5" />
+        Sign in to get started
+      </a>
+      <p className="mt-4 text-xs text-zinc-600">Google, GitHub, Apple, or email — your choice</p>
+    </div>
+  );
+}
+
+// ── Signed-in header strip ────────────────────────────────────────────────────
+
+function AuthHeader({ user }: { user: any }) {
+  return (
+    <div className="fixed top-0 left-0 right-0 z-50 bg-zinc-900/90 backdrop-blur border-b border-zinc-800 flex items-center justify-between px-4 py-1.5">
+      <div className="flex items-center gap-2">
+        {user?.profileImageUrl ? (
+          <img src={user.profileImageUrl} alt="avatar" className="h-6 w-6 rounded-full object-cover" />
+        ) : (
+          <div className="h-6 w-6 rounded-full bg-blue-600 flex items-center justify-center">
+            <User className="h-3.5 w-3.5 text-white" />
+          </div>
+        )}
+        <span className="text-xs text-zinc-400 hidden sm:inline">
+          {user?.firstName || user?.email || "Signed in"}
+        </span>
+      </div>
+      <a
+        href="/api/logout"
+        data-testid="button-logout"
+        className="flex items-center gap-1.5 text-xs text-zinc-500 hover:text-zinc-300 transition-colors py-1 px-2 rounded"
+      >
+        <LogOut className="h-3.5 w-3.5" />
+        Sign out
+      </a>
+    </div>
+  );
+}
+
+// ── App shell ─────────────────────────────────────────────────────────────────
+
+function AppShell() {
+  const { user, isLoading, isAuthenticated } = useAuth();
+
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-zinc-950 flex items-center justify-center">
+        <div className="h-8 w-8 rounded-full border-2 border-blue-500 border-t-transparent animate-spin" />
+      </div>
+    );
+  }
+
+  if (!isAuthenticated) {
+    return <LandingPage />;
+  }
+
+  return (
+    <>
+      <AuthHeader user={user} />
+      <div className="pt-8">
+        <Router />
+      </div>
+    </>
+  );
+}
+
+// ── Root ──────────────────────────────────────────────────────────────────────
+
 function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
         <Toaster />
-        <Router />
+        <AppShell />
       </TooltipProvider>
     </QueryClientProvider>
   );
