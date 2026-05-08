@@ -1,5 +1,5 @@
-import { neon } from '@neondatabase/serverless';
-import { drizzle } from 'drizzle-orm/neon-http';
+import postgres from 'postgres';
+import { drizzle } from 'drizzle-orm/postgres-js';
 import { eq, or, sql, ilike } from 'drizzle-orm';
 import {
   type User, type InsertUser,
@@ -61,15 +61,14 @@ export interface IStorage {
 }
 
 // ── DatabaseStorage ───────────────────────────────────────────────────────────
-// All data (including liquor records) lives in Neon PostgreSQL.
-// Uses the Neon HTTP driver — works in both Node.js and Cloudflare Workers.
+// Uses the standard postgres.js driver — works with Replit's PostgreSQL.
 
 export class DatabaseStorage implements IStorage {
   private db: ReturnType<typeof drizzle>;
   private users = new Map<string, User>();
 
   constructor(databaseUrl: string) {
-    const client = neon(databaseUrl);
+    const client = postgres(databaseUrl, { max: 10 });
     this.db = drizzle(client);
   }
 
@@ -447,8 +446,7 @@ export class MemStorage implements IStorage {
   }
 }
 
-// ── Singleton for the Express dev server ──────────────────────────────────────
-// In Cloudflare Pages, each request creates its own DatabaseStorage instance.
+// ── Singleton for the Express server ──────────────────────────────────────────
 export const storage: IStorage = process.env.DATABASE_URL
   ? new DatabaseStorage(process.env.DATABASE_URL)
   : new MemStorage();
