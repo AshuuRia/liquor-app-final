@@ -1,33 +1,17 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import type { User } from "@shared/models/auth";
-import { isClerkMode, getClerk, getClerkToken } from "@/lib/clerk";
 
 async function fetchUser(): Promise<User | null> {
-  const headers: Record<string, string> = {};
-
-  if (isClerkMode()) {
-    const token = await getClerkToken();
-    if (!token) return null;
-    headers["Authorization"] = `Bearer ${token}`;
-  }
-
   const response = await fetch("/api/auth/user", {
     credentials: "include",
-    headers,
   });
-
   if (response.status === 401) return null;
   if (!response.ok) throw new Error(`${response.status}: ${response.statusText}`);
   return response.json();
 }
 
 async function logout(): Promise<void> {
-  if (isClerkMode()) {
-    const clerk = getClerk();
-    if (clerk) await clerk.signOut();
-  } else {
-    window.location.href = "/api/logout";
-  }
+  window.location.href = "/api/logout";
 }
 
 export function useAuth() {
