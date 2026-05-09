@@ -34,25 +34,32 @@ function b64url(s: string): string {
   return s.replace(/-/g, '+').replace(/_/g, '/');
 }
 
-async function getJwks(secretKey: string): Promise<any[]> {
+// Derive the public JWKS URL from the Clerk publishable key.
+// Format: pk_test_<base64(frontendApi$)> — no secret key needed.
+function getPublicJwksUrl(publishableKey: string): string {
+  const b64 = publishableKey.replace(/^pk_(test|live)_/, '');
+  const frontendApi = atob(b64).replace(/\$$/, '');
+  return `https://${frontendApi}/.well-known/jwks.json`;
+}
+
+async function getJwks(publishableKey: string): Promise<any[]> {
   if (_jwksCache.length && Date.now() < _jwksCacheExpiry) return _jwksCache;
-  const res = await fetch('https://api.clerk.com/v1/jwks', {
-    headers: { Authorization: `Bearer ${secretKey}` },
-  });
-  if (!res.ok) throw new Error('Failed to fetch JWKS');
+  const url = getPublicJwksUrl(publishableKey);
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Failed to fetch JWKS from ${url}: ${res.status}`);
   const { keys } = await res.json() as { keys: any[] };
   _jwksCache = keys;
   _jwksCacheExpiry = Date.now() + 60 * 60 * 1000;
   return _jwksCache;
 }
 
-async function verifyClerkToken(token: string, secretKey: string): Promise<string | null> {
+async function verifyClerkToken(token: string, publishableKey: string): Promise<string | null> {
   try {
     const [hb64, pb64, sb64] = token.split('.');
     if (!hb64 || !pb64 || !sb64) return null;
 
     const header = JSON.parse(atob(b64url(hb64)));
-    const keys = await getJwks(secretKey);
+    const keys = await getJwks(publishableKey);
     const jwk = keys.find((k: any) => k.kid === header.kid);
     if (!jwk) return null;
 
@@ -81,7 +88,7 @@ async function verifyClerkToken(token: string, secretKey: string): Promise<strin
 const requireAuth = async (c: any, next: any) => {
   const authHeader = c.req.header('Authorization');
   if (!authHeader?.startsWith('Bearer ')) return c.json({ error: 'Unauthorized' }, 401);
-  const userId = await verifyClerkToken(authHeader.slice(7), c.env.CLERK_SECRET_KEY);
+  const userId = await verifyClerkToken(authHeader.slice(7), c.env.CLERK_PUBLISHABLE_KEY);
   if (!userId) return c.json({ error: 'Unauthorized' }, 401);
   c.set('userId', userId);
   await next();
@@ -98,24 +105,27 @@ app.get('/config', (c) => {
 app.get('/auth/user', async (c) => {
   const authHeader = c.req.header('Authorization');
   if (!authHeader?.startsWith('Bearer ')) return c.json(null, 401);
-  const userId = await verifyClerkToken(authHeader.slice(7), c.env.CLERK_SECRET_KEY);
+  const userId = await verifyClerkToken(authHeader.slice(7), c.env.CLERK_PUBLISHABLE_KEY);
   if (!userId) return c.json(null, 401);
 
-  try {
-    const userRes = await fetch(`https://api.clerk.com/v1/users/${userId}`, {
-      headers: { Authorization: `Bearer ${c.env.CLERK_SECRET_KEY}` },
-    });
-    if (userRes.ok) {
-      const u = await userRes.json() as any;
-      return c.json({
-        id: u.id,
-        email: u.email_addresses?.[0]?.email_address ?? null,
-        firstName: u.first_name ?? null,
-        lastName: u.last_name ?? null,
-        profileImageUrl: u.image_url ?? null,
+  // Try to get full profile via secret key if available; otherwise return minimal profile
+  if (c.env.CLERK_SECRET_KEY) {
+    try {
+      const userRes = await fetch(`https://api.clerk.com/v1/users/${userId}`, {
+        headers: { Authorization: `Bearer ${c.env.CLERK_SECRET_KEY}` },
       });
-    }
-  } catch {}
+      if (userRes.ok) {
+        const u = await userRes.json() as any;
+        return c.json({
+          id: u.id,
+          email: u.email_addresses?.[0]?.email_address ?? null,
+          firstName: u.first_name ?? null,
+          lastName: u.last_name ?? null,
+          profileImageUrl: u.image_url ?? null,
+        });
+      }
+    } catch {}
+  }
   return c.json({ id: userId });
 });
 
@@ -587,9 +597,9 @@ app.get('/price-compare/session', requireAuth, async (c) => {
 app.post('/price-compare/session', requireAuth, async (c) => {
   try {
     const userId = c.get('userId');
-    const { fileName, rows } = await c.req.json<{ fileName: string; rows: any[] }>();
-    if (!fileName || !rows) return c.json({ success: false, error: 'Missing fields' }, 400);
-    await db(c).savePriceCompareSession(userId, fileName, JSON.stringify(rows));
+    const { fileName, rowsJson } = await c.req.json<{ fileName: string; rowsJson: string }>();
+    if (!fileName || !rowsJson) return c.json({ success: false, error: 'Missing fields' }, 400);
+    await db(c).savePriceCompareSession(userId, fileName, rowsJson);
     return c.json({ success: true });
   } catch (err) {
     return c.json({ success: false, error: 'Failed to save session' }, 500);

@@ -283,11 +283,11 @@ export class D1Storage {
     }
   }
 
-  async loadPriceCompareSession(userId: string): Promise<{ fileName: string; rows: any[] } | null> {
+  async loadPriceCompareSession(userId: string): Promise<{ fileName: string; rowsJson: string } | null> {
     const r = await this.db.select().from(schema.priceCompareSessions)
       .where(eq(schema.priceCompareSessions.userId, userId))
       .limit(1);
     if (!r.length) return null;
-    return { fileName: r[0].fileName, rows: JSON.parse(r[0].rowsJson) };
+    return { fileName: r[0].fileName, rowsJson: r[0].rowsJson };
   }
 }

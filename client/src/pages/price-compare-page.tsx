@@ -181,14 +181,38 @@ export default function PriceComparePage() {
   useEffect(() => { rowsRef.current     = rows;     }, [rows]);
   useEffect(() => { fileNameRef.current = fileName; }, [fileName]);
 
-  // ── Save to localStorage every time rows/fileName change ──────────────────
-  // This is synchronous and guaranteed — it's the primary persistence layer
-  // while the user is on this device. Cloud save is secondary (cross-device).
+  // ── Save on every rows/fileName change ────────────────────────────────────
+  // localStorage: synchronous, instant, always works (primary for same-device)
+  // cloud:        debounced 2 s, requires auth (primary for cross-device)
 
   useEffect(() => {
-    if (fileName && rows.length > 0) {
-      saveLocalSession(fileName, rows);
-    }
+    if (!fileName || rows.length === 0) return;
+
+    // localStorage — always runs, no async, no auth needed
+    saveLocalSession(fileName, rows);
+
+    // cloud — debounced
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    setCloudSaved(false);
+    const snap = { fileName, rows };
+    saveTimerRef.current = setTimeout(async () => {
+      setCloudSaving(true);
+      try {
+        await saveCloudSession(snap.fileName, snap.rows);
+        setCloudSaved(true);
+      } catch (e: any) {
+        setCloudSaved(false);
+        console.error("[price-compare] cloud save failed:", e?.message ?? e);
+        toast({
+          variant: "destructive",
+          title: "Cloud save failed",
+          description: e?.message ?? "Could not save to your account. Data is preserved locally.",
+        });
+      } finally {
+        setCloudSaving(false);
+      }
+    }, 2000);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rows, fileName]);
 
   // ── Load on mount: cloud first, fall back to localStorage ─────────────────
@@ -237,25 +261,6 @@ export default function PriceComparePage() {
     };
   }, []);
 
-  // ── Auto-save to cloud (debounced 2 s after last change) ──────────────────
-
-  const scheduleCloudSave = useCallback((currentFileName: string, currentRows: ComparisonRow[]) => {
-    if (!currentFileName || currentRows.length === 0) return;
-    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-    setCloudSaved(false);
-    saveTimerRef.current = setTimeout(async () => {
-      setCloudSaving(true);
-      try {
-        await saveCloudSession(currentFileName, currentRows);
-        setCloudSaved(true);
-      } catch {
-        // Cloud save failed — localStorage already has the data, so no data loss
-        setCloudSaved(false);
-      } finally {
-        setCloudSaving(false);
-      }
-    }, 2000);
-  }, []);
 
   // ── File handling ─────────────────────────────────────────────────────────
 
@@ -296,7 +301,6 @@ export default function PriceComparePage() {
       setRows(hydrated);
       setScannedIndices([]);
       setFilter("all");
-      scheduleCloudSave(file.name, hydrated);
 
       const changed     = hydrated.filter(r => r.priceDiff !== null && r.priceDiff !== 0).length;
       const notFound    = hydrated.filter(r => !r.matched).length;
@@ -311,7 +315,7 @@ export default function PriceComparePage() {
     } finally {
       setLoading(false);
     }
-  }, [toast, scheduleCloudSave]);
+  }, [toast]);
 
   const onFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
@@ -328,22 +332,14 @@ export default function PriceComparePage() {
   // ── Row editing ───────────────────────────────────────────────────────────
 
   const updateRow = (idx: number, patch: Partial<ComparisonRow>) => {
-    setRows(prev => {
-      const next = prev.map((r, i) => i === idx ? { ...r, ...patch } : r);
-      scheduleCloudSave(fileName, next);
-      return next;
-    });
+    setRows(prev => prev.map((r, i) => i === idx ? { ...r, ...patch } : r));
   };
 
   const resetAllToMichigan = (targetRows: { origIdx: number }[]) => {
     const idxSet = new Set(targetRows.map(x => x.origIdx));
-    setRows(prev => {
-      const next = prev.map((r, i) =>
-        idxSet.has(i) ? { ...r, newPrice: r.michiganPrice ?? r.registerPrice } : r
-      );
-      scheduleCloudSave(fileName, next);
-      return next;
-    });
+    setRows(prev => prev.map((r, i) =>
+      idxSet.has(i) ? { ...r, newPrice: r.michiganPrice ?? r.registerPrice } : r
+    ));
     toast({ title: "Prices reset", description: "New prices set to Michigan price." });
   };
 
