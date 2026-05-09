@@ -49,6 +49,7 @@ export const customNameMappings = sqliteTable("custom_name_mappings", {
 export const priceCompareSessions = sqliteTable("price_compare_sessions", {
   id: text("id").primaryKey(),
   userId: text("user_id").notNull(),
+  sessionName: text("session_name").notNull().default('Auto-save'),
   fileName: text("file_name").notNull(),
   rowsJson: text("rows_json").notNull(),
   createdAt: text("created_at").notNull(),

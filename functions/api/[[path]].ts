@@ -208,7 +208,7 @@ app.get('/search-liquor', async (c) => {
   try {
     const query = c.req.query('query') || '';
     if (query.length < 2) return c.json({ success: true, results: [], message: 'Query too short' });
-    const { results, totalFound } = await db(c).searchLiquorRecords(query, 10);
+    const { results, totalFound } = await db(c).searchLiquorRecords(query, 50);
     return c.json({ success: true, results, totalFound });
   } catch (err) {
     return c.json({ success: false, error: 'Failed to search' }, 500);
@@ -584,10 +584,21 @@ app.post('/compare-prices', requireAuth, async (c) => {
   }
 });
 
-app.get('/price-compare/session', requireAuth, async (c) => {
+app.get('/price-compare/sessions', requireAuth, async (c) => {
   try {
     const userId = c.get('userId');
-    const session = await db(c).loadPriceCompareSession(userId);
+    const sessions = await db(c).listPriceCompareSessions(userId);
+    return c.json({ success: true, sessions });
+  } catch (err) {
+    return c.json({ success: false, error: 'Failed to list sessions' }, 500);
+  }
+});
+
+app.get('/price-compare/session/:id', requireAuth, async (c) => {
+  try {
+    const userId = c.get('userId');
+    const sessionId = c.req.param('id');
+    const session = await db(c).getPriceCompareSession(userId, sessionId);
     return c.json({ success: true, session });
   } catch (err) {
     return c.json({ success: false, error: 'Failed to load session' }, 500);
@@ -597,12 +608,21 @@ app.get('/price-compare/session', requireAuth, async (c) => {
 app.post('/price-compare/session', requireAuth, async (c) => {
   try {
     const userId = c.get('userId');
-    const { fileName, rowsJson } = await c.req.json<{ fileName: string; rowsJson: string }>();
+    const { sessionId, sessionName, fileName, rowsJson } = await c.req.json<{ sessionId?: string; sessionName?: string; fileName: string; rowsJson: string }>();
     if (!fileName || !rowsJson) return c.json({ success: false, error: 'Missing fields' }, 400);
-    await db(c).savePriceCompareSession(userId, fileName, rowsJson);
-    return c.json({ success: true });
+    const session = await db(c).savePriceCompareSession(userId, sessionId || null, sessionName || fileName, fileName, rowsJson);
+    return c.json({ success: true, session });
   } catch (err) {
     return c.json({ success: false, error: 'Failed to save session' }, 500);
+  }
+});
+
+app.delete('/price-compare/session/:id', requireAuth, async (c) => {
+  try {
+    await db(c).deletePriceCompareSession(c.req.param('id'));
+    return c.json({ success: true });
+  } catch (err) {
+    return c.json({ success: false, error: 'Failed to delete session' }, 500);
   }
 });
 

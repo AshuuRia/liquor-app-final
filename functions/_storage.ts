@@ -266,28 +266,50 @@ export class D1Storage {
 
   // ── Price compare sessions ────────────────────────────────────────────────
 
-  async savePriceCompareSession(userId: string, fileName: string, rowsJson: string): Promise<void> {
+  async savePriceCompareSession(userId: string, sessionId: string | null, sessionName: string, fileName: string, rowsJson: string): Promise<{ id: string; sessionName: string; fileName: string; rowsJson: string; updatedAt: string }> {
     const now = new Date().toISOString();
-    const existing = await this.db.select({ id: schema.priceCompareSessions.id })
-      .from(schema.priceCompareSessions)
-      .where(eq(schema.priceCompareSessions.userId, userId))
-      .limit(1);
-    if (existing.length) {
-      await this.db.update(schema.priceCompareSessions)
-        .set({ fileName, rowsJson, updatedAt: now })
-        .where(eq(schema.priceCompareSessions.userId, userId));
-    } else {
-      await this.db.insert(schema.priceCompareSessions).values({
-        id: crypto.randomUUID(), userId, fileName, rowsJson, createdAt: now, updatedAt: now,
-      });
+    if (sessionId) {
+      const existing = await this.db.select({ id: schema.priceCompareSessions.id })
+        .from(schema.priceCompareSessions)
+        .where(and(eq(schema.priceCompareSessions.id, sessionId), eq(schema.priceCompareSessions.userId, userId)))
+        .limit(1);
+      if (existing.length) {
+        await this.db.update(schema.priceCompareSessions)
+          .set({ sessionName, fileName, rowsJson, updatedAt: now })
+          .where(eq(schema.priceCompareSessions.id, sessionId));
+        return { id: sessionId, sessionName, fileName, rowsJson, updatedAt: now };
+      }
     }
+    const id = crypto.randomUUID();
+    await this.db.insert(schema.priceCompareSessions).values({
+      id, userId, sessionName, fileName, rowsJson, createdAt: now, updatedAt: now,
+    });
+    return { id, sessionName, fileName, rowsJson, updatedAt: now };
   }
 
-  async loadPriceCompareSession(userId: string): Promise<{ fileName: string; rowsJson: string } | null> {
-    const r = await this.db.select().from(schema.priceCompareSessions)
+  async listPriceCompareSessions(userId: string): Promise<{ id: string; sessionName: string; fileName: string; updatedAt: string }[]> {
+    const r = await this.db.select({
+      id: schema.priceCompareSessions.id,
+      sessionName: schema.priceCompareSessions.sessionName,
+      fileName: schema.priceCompareSessions.fileName,
+      updatedAt: schema.priceCompareSessions.updatedAt,
+    })
+      .from(schema.priceCompareSessions)
       .where(eq(schema.priceCompareSessions.userId, userId))
+      .orderBy(schema.priceCompareSessions.updatedAt);
+    return r.reverse();
+  }
+
+  async getPriceCompareSession(userId: string, sessionId: string): Promise<{ fileName: string; rowsJson: string } | null> {
+    const r = await this.db.select().from(schema.priceCompareSessions)
+      .where(and(eq(schema.priceCompareSessions.id, sessionId), eq(schema.priceCompareSessions.userId, userId)))
       .limit(1);
     if (!r.length) return null;
     return { fileName: r[0].fileName, rowsJson: r[0].rowsJson };
+  }
+
+  async deletePriceCompareSession(sessionId: string): Promise<void> {
+    await this.db.delete(schema.priceCompareSessions)
+      .where(eq(schema.priceCompareSessions.id, sessionId));
   }
 }

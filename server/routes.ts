@@ -230,7 +230,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const { query } = req.query;
       if (!query || typeof query !== 'string' || query.length < 2) return res.json({ success: true, results: [], message: "Query too short" });
-      const { results, totalFound } = await storage.searchLiquorRecords(query.trim(), 10);
+      const { results, totalFound } = await storage.searchLiquorRecords(query.trim(), 50);
       res.json({ success: true, results, totalFound });
     } catch (error) {
       res.status(500).json({ success: false, error: "Failed to search liquor records" });
@@ -659,12 +659,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // ── Price compare sessions (cloud save/load) ──────────────────────────────────
 
-  app.get("/api/price-compare/session", isAuthenticated, async (req: any, res) => {
+  app.get("/api/price-compare/sessions", isAuthenticated, async (req: any, res) => {
     try {
       const userId = getUserId(req);
-      const session = await storage.getPriceCompareSession(userId);
+      const sessions = await storage.listPriceCompareSessions(userId);
+      res.json({ success: true, sessions });
+    } catch {
+      res.status(500).json({ success: false, error: "Failed to list sessions" });
+    }
+  });
+
+  app.get("/api/price-compare/session/:id", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = getUserId(req);
+      const session = await storage.getPriceCompareSession(userId, req.params.id);
       res.json({ success: true, session: session || null });
-    } catch (error) {
+    } catch {
       res.status(500).json({ success: false, error: "Failed to load session" });
     }
   });
@@ -672,12 +682,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/price-compare/session", isAuthenticated, async (req: any, res) => {
     try {
       const userId = getUserId(req);
-      const { fileName, rowsJson } = req.body;
+      const { sessionId, sessionName, fileName, rowsJson } = req.body;
       if (!fileName || !rowsJson) return res.status(400).json({ success: false, error: "fileName and rowsJson are required" });
-      const session = await storage.savePriceCompareSession(userId, fileName, rowsJson);
+      const session = await storage.savePriceCompareSession(userId, sessionId || null, sessionName || fileName, fileName, rowsJson);
       res.json({ success: true, session });
-    } catch (error) {
+    } catch {
       res.status(500).json({ success: false, error: "Failed to save session" });
+    }
+  });
+
+  app.delete("/api/price-compare/session/:id", isAuthenticated, async (req: any, res) => {
+    try {
+      await storage.deletePriceCompareSession(req.params.id);
+      res.json({ success: true });
+    } catch {
+      res.status(500).json({ success: false, error: "Failed to delete session" });
     }
   });
 

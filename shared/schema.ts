@@ -107,6 +107,7 @@ export type CustomNameMapping = typeof customNameMappings.$inferSelect;
 export const priceCompareSessions = pgTable("price_compare_sessions", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   userId: text("user_id").notNull(),
+  sessionName: text("session_name").notNull().default('Auto-save'),
   fileName: text("file_name").notNull(),
   rowsJson: text("rows_json").notNull(),  // JSON blob of ComparisonRow[]
   createdAt: timestamp("created_at").defaultNow().notNull(),

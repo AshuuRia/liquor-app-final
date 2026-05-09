@@ -11,7 +11,7 @@ import {
   ArrowLeft, Upload, TrendingUp, TrendingDown,
   AlertCircle, CheckCircle, Download, RefreshCw, ChevronUp, ChevronDown,
   AlertTriangle, HelpCircle, Scan, FileText, Trash2, Package, XCircle,
-  Cloud, CloudOff, Save
+  Cloud, CloudOff, Save, FolderOpen, Plus, Clock,
 } from "lucide-react";
 import type { LiquorRecord } from "@shared/schema";
 import { getAuthHeaders } from "@/lib/queryClient";
@@ -37,6 +37,13 @@ interface ComparisonRow {
   newPrice: number;
   useCustomName: boolean;
   customName: string;
+}
+
+interface SessionMeta {
+  id: string;
+  sessionName: string;
+  fileName: string;
+  updatedAt: string | Date;
 }
 
 type PageMode = "csv" | "scan";
@@ -87,65 +94,97 @@ function normalizeBarcode(raw: string): string {
   return s || raw;
 }
 
-// ── Local (localStorage) save/load — always works, instant ────────────────────
-
-const LOCAL_KEY = "price_compare_session";
-
-function saveLocalSession(fileName: string, rows: ComparisonRow[]): void {
+function fmtDate(d: string | Date): string {
   try {
-    localStorage.setItem(LOCAL_KEY, JSON.stringify({ fileName, rows }));
-  } catch { /* storage full — ignore */ }
+    return new Date(d).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  } catch { return String(d); }
 }
 
+// ── Local (localStorage) save/load ────────────────────────────────────────────
+
+const LOCAL_KEY     = "price_compare_session";
+const SESSION_ID_KEY = "price_compare_session_id";
+const SESSION_NAME_KEY = "price_compare_session_name";
+
+function saveLocalSession(fileName: string, rows: ComparisonRow[]): void {
+  try { localStorage.setItem(LOCAL_KEY, JSON.stringify({ fileName, rows })); } catch { /* storage full */ }
+}
 function loadLocalSession(): { fileName: string; rows: ComparisonRow[] } | null {
   try {
     const raw = localStorage.getItem(LOCAL_KEY);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as { fileName: string; rows: ComparisonRow[] };
-    if (!parsed.rows?.length) return null;
-    return parsed;
-  } catch {
-    return null;
-  }
+    return parsed.rows?.length ? parsed : null;
+  } catch { return null; }
 }
-
 function clearLocalSession(): void {
-  try { localStorage.removeItem(LOCAL_KEY); } catch { /* ignore */ }
+  try { localStorage.removeItem(LOCAL_KEY); localStorage.removeItem(SESSION_ID_KEY); } catch { /* ignore */ }
+}
+function loadStoredSessionId(): string | null {
+  try { return localStorage.getItem(SESSION_ID_KEY); } catch { return null; }
+}
+function saveStoredSessionId(id: string | null): void {
+  try {
+    if (id) localStorage.setItem(SESSION_ID_KEY, id);
+    else localStorage.removeItem(SESSION_ID_KEY);
+  } catch { /* ignore */ }
+}
+function loadStoredSessionName(): string {
+  try { return localStorage.getItem(SESSION_NAME_KEY) || ''; } catch { return ''; }
+}
+function saveStoredSessionName(name: string): void {
+  try { localStorage.setItem(SESSION_NAME_KEY, name); } catch { /* ignore */ }
 }
 
-// ── Cloud save/load helpers ───────────────────────────────────────────────────
+// ── Cloud helpers ─────────────────────────────────────────────────────────────
 
-async function loadCloudSession(): Promise<{ fileName: string; rows: ComparisonRow[] } | null> {
+async function listCloudSessions(): Promise<SessionMeta[]> {
   try {
     const authHeaders = await getAuthHeaders();
-    const res = await fetch("/api/price-compare/session", {
-      credentials: "include",
-      headers: authHeaders,
-    });
+    const res = await fetch("/api/price-compare/sessions", { credentials: "include", headers: authHeaders });
+    if (!res.ok) return [];
+    const data = await res.json();
+    return data.sessions || [];
+  } catch { return []; }
+}
+
+async function loadCloudSession(sessionId: string): Promise<{ fileName: string; rows: ComparisonRow[] } | null> {
+  try {
+    const authHeaders = await getAuthHeaders();
+    const res = await fetch(`/api/price-compare/session/${sessionId}`, { credentials: "include", headers: authHeaders });
     if (!res.ok) return null;
     const data = await res.json();
     if (!data.session?.rowsJson) return null;
     const rows = JSON.parse(data.session.rowsJson) as ComparisonRow[];
     return { fileName: data.session.fileName, rows };
-  } catch {
-    return null;
-  }
+  } catch { return null; }
 }
 
-async function saveCloudSession(fileName: string, rows: ComparisonRow[]): Promise<void> {
-  try {
-    const authHeaders = await getAuthHeaders();
-    const res = await fetch("/api/price-compare/session", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...authHeaders },
-      credentials: "include",
-      body: JSON.stringify({ fileName, rowsJson: JSON.stringify(rows) }),
-    });
-    if (!res.ok) throw new Error(`${res.status}`);
-  } catch (e) {
-    console.warn("[price-compare] cloud save failed:", e);
-    throw e;
-  }
+async function saveCloudSession(
+  sessionId: string | null,
+  sessionName: string,
+  fileName: string,
+  rows: ComparisonRow[]
+): Promise<string | null> {
+  const authHeaders = await getAuthHeaders();
+  const res = await fetch("/api/price-compare/session", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders },
+    credentials: "include",
+    body: JSON.stringify({ sessionId, sessionName, fileName, rowsJson: JSON.stringify(rows) }),
+  });
+  if (!res.ok) throw new Error(`${res.status}`);
+  const data = await res.json();
+  return data.session?.id || null;
+}
+
+async function deleteCloudSession(id: string): Promise<void> {
+  const authHeaders = await getAuthHeaders();
+  await fetch(`/api/price-compare/session/${id}`, {
+    method: "DELETE",
+    headers: authHeaders,
+    credentials: "include",
+  });
 }
 
 // ── Main component ────────────────────────────────────────────────────────────
@@ -175,34 +214,47 @@ export default function PriceComparePage() {
   const [cloudSaved, setCloudSaved]   = useState(false);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Refs that always hold the latest values so unmount cleanup can read them synchronously
-  const rowsRef     = useRef<ComparisonRow[]>([]);
-  const fileNameRef = useRef<string>("");
-  useEffect(() => { rowsRef.current     = rows;     }, [rows]);
-  useEffect(() => { fileNameRef.current = fileName; }, [fileName]);
+  // Multi-session state
+  const [currentSessionId, setCurrentSessionId]     = useState<string | null>(null);
+  const [currentSessionName, setCurrentSessionName] = useState("");
+  const [sessionsOpen, setSessionsOpen]             = useState(false);
+  const [cloudSessions, setCloudSessions]           = useState<SessionMeta[]>([]);
+  const [sessionsLoading, setSessionsLoading]       = useState(false);
 
-  // ── Save on every rows/fileName change ────────────────────────────────────
-  // localStorage: synchronous, instant, always works (primary for same-device)
-  // cloud:        debounced 2 s, requires auth (primary for cross-device)
+  // Refs so unmount cleanup reads latest values synchronously
+  const rowsRef          = useRef<ComparisonRow[]>([]);
+  const fileNameRef      = useRef<string>("");
+  const sessionIdRef     = useRef<string | null>(null);
+  const sessionNameRef   = useRef<string>("");
+  useEffect(() => { rowsRef.current        = rows;             }, [rows]);
+  useEffect(() => { fileNameRef.current    = fileName;         }, [fileName]);
+  useEffect(() => { sessionIdRef.current   = currentSessionId; }, [currentSessionId]);
+  useEffect(() => { sessionNameRef.current = currentSessionName; }, [currentSessionName]);
 
+  // Persist sessionId / sessionName to localStorage when they change
+  useEffect(() => { saveStoredSessionId(currentSessionId); }, [currentSessionId]);
+  useEffect(() => { saveStoredSessionName(currentSessionName); }, [currentSessionName]);
+
+  // ── Auto-save on rows/fileName change ────────────────────────────────────
   useEffect(() => {
     if (!fileName || rows.length === 0) return;
-
-    // localStorage — always runs, no async, no auth needed
     saveLocalSession(fileName, rows);
-
-    // cloud — debounced
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     setCloudSaved(false);
-    const snap = { fileName, rows };
+    const snap = {
+      sessionId: sessionIdRef.current,
+      sessionName: sessionNameRef.current || fileName,
+      fileName,
+      rows,
+    };
     saveTimerRef.current = setTimeout(async () => {
       setCloudSaving(true);
       try {
-        await saveCloudSession(snap.fileName, snap.rows);
+        const newId = await saveCloudSession(snap.sessionId, snap.sessionName, snap.fileName, snap.rows);
+        if (newId && !snap.sessionId) setCurrentSessionId(newId);
         setCloudSaved(true);
       } catch (e: any) {
         setCloudSaved(false);
-        console.error("[price-compare] cloud save failed:", e?.message ?? e);
         toast({
           variant: "destructive",
           title: "Cloud save failed",
@@ -215,61 +267,135 @@ export default function PriceComparePage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rows, fileName]);
 
-  // ── Load on mount: cloud first, fall back to localStorage ─────────────────
-
+  // ── Load on mount ─────────────────────────────────────────────────────────
   useEffect(() => {
     let cancelled = false;
 
-    // Show localStorage data immediately (instant, no network)
     const local = loadLocalSession();
-    if (local && local.rows.length > 0) {
+    if (local?.rows.length) {
       setRows(local.rows);
       setFileName(local.fileName);
-      setCloudSaved(false);
     }
 
-    // Then try to load fresher data from the cloud
-    loadCloudSession().then(saved => {
-      if (cancelled) return;
-      if (saved && saved.rows.length > 0) {
-        setRows(saved.rows);
-        setFileName(saved.fileName);
-        setCloudSaved(true);
-        if (!local || local.rows.length === 0) {
-          toast({
-            title: "Session restored",
-            description: `Loaded ${saved.rows.length} products from your last session.`,
-          });
+    const storedId   = loadStoredSessionId();
+    const storedName = loadStoredSessionName();
+    if (storedId) {
+      setCurrentSessionId(storedId);
+      if (storedName) setCurrentSessionName(storedName);
+    }
+
+    const tryCloud = async () => {
+      if (storedId) {
+        const session = await loadCloudSession(storedId);
+        if (cancelled) return;
+        if (session?.rows.length) {
+          setRows(session.rows);
+          setFileName(session.fileName);
+          setCloudSaved(true);
+          if (!local?.rows.length) {
+            toast({ title: "Session restored", description: `${session.rows.length} products loaded.` });
+          }
+          return;
         }
       }
-    });
+      // No stored id or failed — load most recent from server
+      const sessions = await listCloudSessions();
+      if (cancelled || !sessions.length) return;
+      const most = sessions[0];
+      const session = await loadCloudSession(most.id);
+      if (cancelled || !session?.rows.length) return;
+      setRows(session.rows);
+      setFileName(session.fileName);
+      setCurrentSessionId(most.id);
+      setCurrentSessionName(most.sessionName);
+      setCloudSaved(true);
+      if (!local?.rows.length) {
+        toast({ title: "Session restored", description: `${session.rows.length} products from "${most.sessionName}".` });
+      }
+    };
 
+    tryCloud();
     return () => { cancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ── On unmount: flush localStorage (sync), kick off cloud save (async) ────
-
+  // ── Flush on unmount ──────────────────────────────────────────────────────
   useEffect(() => {
     return () => {
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
       const fn = fileNameRef.current;
       const rs = rowsRef.current;
       if (fn && rs.length > 0) {
-        saveLocalSession(fn, rs);          // synchronous — always succeeds
-        saveCloudSession(fn, rs).catch(() => {}); // best-effort async
+        saveLocalSession(fn, rs);
+        saveCloudSession(sessionIdRef.current, sessionNameRef.current || fn, fn, rs).catch(() => {});
       }
     };
   }, []);
 
+  // ── Sessions dialog helpers ───────────────────────────────────────────────
+  const openSessions = async () => {
+    setSessionsOpen(true);
+    setSessionsLoading(true);
+    try {
+      const sessions = await listCloudSessions();
+      setCloudSessions(sessions);
+    } finally {
+      setSessionsLoading(false);
+    }
+  };
+
+  const handleLoadSession = async (meta: SessionMeta) => {
+    const session = await loadCloudSession(meta.id);
+    if (!session) {
+      toast({ variant: "destructive", title: "Could not load session" });
+      return;
+    }
+    setRows(session.rows);
+    setFileName(session.fileName);
+    setCurrentSessionId(meta.id);
+    setCurrentSessionName(meta.sessionName);
+    setScannedIndices([]);
+    setFilter("all");
+    setSessionsOpen(false);
+    saveLocalSession(session.fileName, session.rows);
+    setCloudSaved(true);
+    toast({ title: `Loaded "${meta.sessionName}"`, description: `${session.rows.length} products restored.` });
+  };
+
+  const handleDeleteSession = async (id: string) => {
+    await deleteCloudSession(id);
+    setCloudSessions(prev => prev.filter(s => s.id !== id));
+    if (currentSessionId === id) {
+      setCurrentSessionId(null);
+      setCurrentSessionName("");
+      clearLocalSession();
+    }
+    toast({ title: "Session deleted" });
+  };
+
+  const handleNewSession = () => {
+    setRows([]);
+    setFileName("");
+    setCurrentSessionId(null);
+    setCurrentSessionName("");
+    clearLocalSession();
+    setCloudSaved(false);
+    setScannedIndices([]);
+    setFilter("all");
+    setSessionsOpen(false);
+    toast({ title: "Ready for new session", description: "Upload a CSV to start." });
+  };
 
   // ── File handling ─────────────────────────────────────────────────────────
-
   const processFile = useCallback(async (file: File) => {
     if (!file.name.endsWith(".csv")) {
       toast({ variant: "destructive", title: "Wrong file type", description: "Please upload a CSV file." });
       return;
     }
+    const newName = file.name.replace(/\.csv$/i, '');
     setFileName(file.name);
+    setCurrentSessionId(null);  // new upload = new session
+    setCurrentSessionName(newName);
     setLoading(true);
     try {
       const csvText = await file.text();
@@ -286,17 +412,13 @@ export default function PriceComparePage() {
       if (data.dbEmpty) {
         setDbEmpty(true);
         setRows([]);
-        toast({ variant: "destructive", title: "Michigan database not loaded", description: "Go to More → Refresh Data first, then come back." });
+        toast({ variant: "destructive", title: "Michigan database not loaded", description: "Go to More → Refresh Data first." });
         return;
       }
 
       setDbEmpty(false);
       const hydrated: ComparisonRow[] = data.rows.map((r: any) => ({
-        ...r,
-        resolvedByUser: false,
-        newPrice:       r.registerPrice,
-        useCustomName:  false,
-        customName:     r.name,
+        ...r, resolvedByUser: false, newPrice: r.registerPrice, useCustomName: false, customName: r.name,
       }));
       setRows(hydrated);
       setScannedIndices([]);
@@ -308,7 +430,7 @@ export default function PriceComparePage() {
       const codeMatched = hydrated.filter(r => r.matchedBy === 'code').length;
       toast({
         title: "Comparison ready",
-        description: `${hydrated.length} products · ${changed} price changes · ${notFound} not found in MI DB${codeMatched ? ` · ${codeMatched} matched by liquor code` : ""}${ambiguous ? ` · ${ambiguous} need review` : ""}`,
+        description: `${hydrated.length} products · ${changed} price changes · ${notFound} not found${codeMatched ? ` · ${codeMatched} by liquor code` : ""}${ambiguous ? ` · ${ambiguous} need review` : ""}`,
       });
     } catch (err: any) {
       toast({ variant: "destructive", title: "Import failed", description: err.message });
@@ -322,7 +444,6 @@ export default function PriceComparePage() {
     if (f) processFile(f);
     e.target.value = "";
   };
-
   const onDrop = (e: React.DragEvent) => {
     e.preventDefault(); setDragOver(false);
     const f = e.dataTransfer.files?.[0];
@@ -330,29 +451,21 @@ export default function PriceComparePage() {
   };
 
   // ── Row editing ───────────────────────────────────────────────────────────
-
   const updateRow = (idx: number, patch: Partial<ComparisonRow>) => {
     setRows(prev => prev.map((r, i) => i === idx ? { ...r, ...patch } : r));
   };
-
   const resetAllToMichigan = (targetRows: { origIdx: number }[]) => {
     const idxSet = new Set(targetRows.map(x => x.origIdx));
-    setRows(prev => prev.map((r, i) =>
-      idxSet.has(i) ? { ...r, newPrice: r.michiganPrice ?? r.registerPrice } : r
-    ));
+    setRows(prev => prev.map((r, i) => idxSet.has(i) ? { ...r, newPrice: r.michiganPrice ?? r.registerPrice } : r));
     toast({ title: "Prices reset", description: "New prices set to Michigan price." });
   };
-
   const applyMatch = (origIdx: number, match: LiquorRecord) => {
     const row = rows[origIdx];
     const michiganPrice = match.shelfPrice ?? null;
-    const priceDiff = michiganPrice !== null
-      ? Math.round((michiganPrice - row.registerPrice) * 100) / 100
-      : null;
+    const priceDiff = michiganPrice !== null ? Math.round((michiganPrice - row.registerPrice) * 100) / 100 : null;
     updateRow(origIdx, {
-      matched: true, resolvedByUser: true,
-      michiganPrice, priceDiff,
-      michiganName:       `${match.brandName} ${match.bottleSize}`,
+      matched: true, resolvedByUser: true, michiganPrice, priceDiff,
+      michiganName: `${match.brandName} ${match.bottleSize}`,
       michiganBottleSize: match.bottleSize ?? null,
       michiganLiquorCode: match.liquorCode ?? null,
       newPrice: michiganPrice ?? row.registerPrice,
@@ -362,14 +475,12 @@ export default function PriceComparePage() {
   };
 
   // ── Sorting ───────────────────────────────────────────────────────────────
-
   const toggleSort = (key: SortKey) => {
     if (sortKey === key) setSortDir(d => d === "asc" ? "desc" : "asc");
     else { setSortKey(key); setSortDir("asc"); }
   };
 
   // ── Derived data ──────────────────────────────────────────────────────────
-
   const totalIncreased = rows.filter(r => r.priceDiff !== null && r.priceDiff > 0).length;
   const totalDecreased = rows.filter(r => r.priceDiff !== null && r.priceDiff < 0).length;
   const totalSame      = rows.filter(r => r.priceDiff === 0).length;
@@ -408,7 +519,6 @@ export default function PriceComparePage() {
   const visible = applyFilters(allRowsWithIdx);
 
   // ── Scan mode ─────────────────────────────────────────────────────────────
-
   const handleBarcodeScan = useCallback((barcode: string) => {
     if (rows.length === 0) {
       toast({ variant: "destructive", title: "No CSV loaded", description: "Upload your register CSV first, then scan bottles." });
@@ -417,14 +527,11 @@ export default function PriceComparePage() {
     const norm = normalizeBarcode(barcode);
     const matchingIndices = rows
       .map((r, i) => ({ r, i }))
-      .filter(({ r }) => {
-        const rowUpc = normalizeBarcode(r.upc);
-        return rowUpc === norm || rowUpc === barcode;
-      })
+      .filter(({ r }) => { const ru = normalizeBarcode(r.upc); return ru === norm || ru === barcode; })
       .map(({ i }) => i);
 
     if (matchingIndices.length === 0) {
-      toast({ variant: "destructive", title: "Not in your CSV", description: `UPC ${barcode} wasn't found in your uploaded register file.` });
+      toast({ variant: "destructive", title: "Not in your CSV", description: `UPC ${barcode} wasn't found in your register file.` });
       return;
     }
     const newIdx = matchingIndices[0];
@@ -436,9 +543,7 @@ export default function PriceComparePage() {
     toast({ title: "Added", description: rows[newIdx].name });
   }, [rows, scannedIndices, toast]);
 
-  const removeFromScanList = (origIdx: number) => {
-    setScannedIndices(prev => prev.filter(i => i !== origIdx));
-  };
+  const removeFromScanList = (origIdx: number) => setScannedIndices(prev => prev.filter(i => i !== origIdx));
 
   const scannedRowsWithIdx = scannedIndices
     .map(i => ({ row: rows[i], origIdx: i }))
@@ -453,7 +558,6 @@ export default function PriceComparePage() {
   const scanAmbiguous = scannedIndices.filter(i => rows[i].multipleMatches && !rows[i].resolvedByUser).length;
 
   // ── Export helpers ────────────────────────────────────────────────────────
-
   const doExport = (sourceRows: ComparisonRow[], customNames: boolean, filePrefix: string) => {
     if (sourceRows.length === 0) return;
     const csv    = buildPtouchCsv(sourceRows, customNames);
@@ -461,29 +565,20 @@ export default function PriceComparePage() {
     downloadCsv(csv, `${filePrefix}${suffix}.csv`);
     toast({ title: "Exported!", description: `Downloaded ${sourceRows.length} products.` });
   };
-
   const exportChangedOnly = (customNames: boolean, filePrefix: string) => {
     const changed = rows.filter(r => Math.round((r.newPrice - r.registerPrice) * 100) !== 0);
-    if (changed.length === 0) {
-      toast({ title: "No price changes", description: "All new prices match your register prices." });
-      return;
-    }
+    if (changed.length === 0) { toast({ title: "No price changes" }); return; }
     doExport(changed, customNames, `${filePrefix}_changed`);
   };
 
   // ── Sub-components ────────────────────────────────────────────────────────
-
   const SortIcon = ({ k }: { k: SortKey }) =>
     sortKey !== k ? null :
-    sortDir === "asc"
-      ? <ChevronUp className="h-3 w-3 inline ml-1" />
-      : <ChevronDown className="h-3 w-3 inline ml-1" />;
+    sortDir === "asc" ? <ChevronUp className="h-3 w-3 inline ml-1" /> : <ChevronDown className="h-3 w-3 inline ml-1" />;
 
   const Th = ({ label, k, className = "" }: { label: string; k: SortKey; className?: string }) => (
-    <th
-      onClick={() => toggleSort(k)}
-      className={`px-3 py-3 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wide cursor-pointer hover:text-foreground select-none whitespace-nowrap ${className}`}
-    >
+    <th onClick={() => toggleSort(k)}
+      className={`px-3 py-3 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wide cursor-pointer hover:text-foreground select-none whitespace-nowrap ${className}`}>
       {label}<SortIcon k={k} />
     </th>
   );
@@ -491,7 +586,7 @@ export default function PriceComparePage() {
   const DiffBadge = ({ diff }: { diff: number | null }) => {
     if (diff === null) return <Badge variant="outline" className="text-xs">No match</Badge>;
     if (diff === 0)    return <Badge variant="secondary" className="text-xs">No change</Badge>;
-    if (diff > 0)      return (
+    if (diff > 0) return (
       <Badge className="text-xs bg-red-100 text-red-700 border-red-200 hover:bg-red-100">
         <TrendingUp className="h-3 w-3 mr-1" />+${diff.toFixed(2)}
       </Badge>
@@ -532,86 +627,39 @@ export default function PriceComparePage() {
           </thead>
           <tbody className="divide-y divide-border">
             {rowsWithIdx.length === 0 && (
-              <tr>
-                <td colSpan={showRemove ? 9 : 8} className="px-4 py-8 text-center text-muted-foreground">
-                  {emptyLabel}
-                </td>
-              </tr>
+              <tr><td colSpan={showRemove ? 9 : 8} className="px-4 py-8 text-center text-muted-foreground">{emptyLabel}</td></tr>
             )}
             {rowsWithIdx.map(({ row, origIdx }) => {
               const needsReview = row.multipleMatches && !row.resolvedByUser;
-              const rowBg = needsReview
-                ? "bg-orange-50/60"
-                : !row.matched
-                  ? "bg-amber-50/40"
-                  : row.priceDiff && row.priceDiff > 0
-                    ? "bg-red-50/30"
-                    : row.priceDiff && row.priceDiff < 0
-                      ? "bg-green-50/30"
-                      : "";
+              const rowBg = needsReview ? "bg-orange-50/60" : !row.matched ? "bg-amber-50/40" : "";
               return (
-                <tr key={origIdx} className={`hover:bg-muted/20 transition-colors ${rowBg}`}>
-                  {/* Name */}
+                <tr key={origIdx} className={`hover:bg-muted/30 transition-colors ${rowBg}`}>
                   <td className="px-3 py-2.5">
-                    <div className="flex items-start gap-2">
-                      {needsReview && (
-                        <button
-                          title="Multiple Michigan records share this UPC — click to pick the correct one"
-                          onClick={() => setDisambigRow({ origIdx, row })}
-                          className="flex-shrink-0 mt-0.5 bg-orange-100 hover:bg-orange-200 text-orange-600 rounded-full h-5 w-5 flex items-center justify-center transition-colors"
-                        >
-                          <HelpCircle className="h-3 w-3" />
-                        </button>
+                    <div className="flex flex-col">
+                      <span className="font-medium text-foreground leading-tight">{row.name}</span>
+                      {row.michiganName && row.michiganName !== row.name && (
+                        <span className="text-xs text-muted-foreground leading-tight mt-0.5">MI: {row.michiganName}</span>
                       )}
-                      {row.resolvedByUser && (
-                        <button
-                          title="Resolved — click to change the match"
-                          onClick={() => setDisambigRow({ origIdx, row })}
-                          className="flex-shrink-0 mt-0.5 bg-blue-100 hover:bg-blue-200 text-blue-600 rounded-full h-5 w-5 flex items-center justify-center transition-colors"
-                        >
-                          <CheckCircle className="h-3 w-3" />
-                        </button>
-                      )}
-                      <div className="min-w-0">
-                        <p className="font-medium text-foreground leading-tight">{row.name}</p>
-                        {row.michiganName && row.michiganName !== row.name && (
-                          <p className="text-xs text-muted-foreground mt-0.5">MI: {row.michiganName}</p>
-                        )}
-                        {row.matchedBy === 'code' && (
-                          <p className="text-xs text-blue-500 mt-0.5">matched by liquor code</p>
-                        )}
-                      </div>
                     </div>
                   </td>
-                  {/* UPC */}
                   <td className="px-3 py-2.5 font-mono text-xs text-muted-foreground whitespace-nowrap">{row.upc}</td>
-                  {/* Liquor Code */}
-                  <td className="px-3 py-2.5 font-mono text-xs text-muted-foreground whitespace-nowrap">
-                    {row.michiganLiquorCode || row.liquorCode || <span className="text-muted-foreground/40">—</span>}
-                  </td>
-                  {/* Your price */}
-                  <td className="px-3 py-2.5 text-right font-medium tabular-nums">${row.registerPrice.toFixed(2)}</td>
-                  {/* MI price */}
+                  <td className="px-3 py-2.5 font-mono text-xs text-muted-foreground whitespace-nowrap">{row.michiganLiquorCode || row.liquorCode || "—"}</td>
+                  <td className="px-3 py-2.5 text-right tabular-nums">${row.registerPrice.toFixed(2)}</td>
                   <td className="px-3 py-2.5 text-right tabular-nums">
-                    {row.michiganPrice !== null
-                      ? <span className="font-medium">${row.michiganPrice.toFixed(2)}</span>
-                      : <span className="text-muted-foreground text-xs">—</span>}
+                    {row.michiganPrice !== null ? `$${row.michiganPrice.toFixed(2)}` : "—"}
                   </td>
-                  {/* Diff */}
                   <td className="px-3 py-2.5">
                     {needsReview
                       ? <Badge className="text-xs bg-orange-100 text-orange-700 border-orange-200 hover:bg-orange-100 cursor-pointer" onClick={() => setDisambigRow({ origIdx, row })}>Pick match</Badge>
                       : <DiffBadge diff={row.priceDiff} />
                     }
                   </td>
-                  {/* New price */}
                   <td className="px-3 py-2.5">
                     <div className="flex items-center gap-1 justify-end">
                       <span className="text-muted-foreground text-sm">$</span>
                       <input
                         key={`${origIdx}-${row.newPrice}`}
-                        type="text"
-                        inputMode="decimal"
+                        type="text" inputMode="decimal"
                         defaultValue={row.newPrice.toFixed(2)}
                         onBlur={e => {
                           const raw = e.target.value.replace(/[^0-9.]/g, '');
@@ -623,49 +671,30 @@ export default function PriceComparePage() {
                         className="w-20 text-right rounded border border-border bg-background px-2 py-1 text-sm font-medium focus:outline-none focus:ring-1 focus:ring-primary tabular-nums"
                       />
                       {row.michiganPrice !== null && row.newPrice !== row.michiganPrice && (
-                        <button
-                          title="Reset to MI price"
-                          onClick={() => updateRow(origIdx, { newPrice: row.michiganPrice! })}
-                          className="text-muted-foreground hover:text-primary transition-colors ml-0.5"
-                        >
+                        <button title="Reset to MI price" onClick={() => updateRow(origIdx, { newPrice: row.michiganPrice! })}
+                          className="text-muted-foreground hover:text-primary transition-colors ml-0.5">
                           <RefreshCw className="h-3 w-3" />
                         </button>
                       )}
                     </div>
                   </td>
-                  {/* Name override */}
                   <td className="px-3 py-2.5">
                     <div className="flex items-center gap-1.5 min-w-[160px]">
-                      <input
-                        type="checkbox"
-                        id={`override-${origIdx}`}
-                        checked={row.useCustomName}
-                        onChange={e => updateRow(origIdx, { useCustomName: e.target.checked })}
-                        className="rounded border-border"
-                      />
+                      <input type="checkbox" id={`override-${origIdx}`} checked={row.useCustomName}
+                        onChange={e => updateRow(origIdx, { useCustomName: e.target.checked })} className="rounded border-border" />
                       {row.useCustomName ? (
-                        <input
-                          type="text"
-                          value={row.customName}
+                        <input type="text" value={row.customName}
                           onChange={e => updateRow(origIdx, { customName: e.target.value })}
                           className="flex-1 min-w-0 rounded border border-border bg-background px-2 py-0.5 text-xs focus:outline-none focus:ring-1 focus:ring-primary"
-                          placeholder="Custom name…"
-                        />
+                          placeholder="Custom name…" />
                       ) : (
-                        <label htmlFor={`override-${origIdx}`} className="text-xs text-muted-foreground cursor-pointer">
-                          Use custom name
-                        </label>
+                        <label htmlFor={`override-${origIdx}`} className="text-xs text-muted-foreground cursor-pointer">Use custom name</label>
                       )}
                     </div>
                   </td>
-                  {/* Remove (scan mode only) */}
                   {showRemove && (
                     <td className="px-2 py-2.5 text-right">
-                      <button
-                        onClick={() => onRemove?.(origIdx)}
-                        className="text-muted-foreground hover:text-destructive transition-colors"
-                        title="Remove from scan list"
-                      >
+                      <button onClick={() => onRemove?.(origIdx)} className="text-muted-foreground hover:text-destructive transition-colors" title="Remove">
                         <XCircle className="h-4 w-4" />
                       </button>
                     </td>
@@ -680,111 +709,97 @@ export default function PriceComparePage() {
   );
 
   // ── Cloud status indicator ────────────────────────────────────────────────
-
   const CloudStatus = () => {
     if (rows.length === 0) return null;
-    if (cloudSaving) return (
-      <span className="flex items-center gap-1 text-xs text-muted-foreground">
-        <Save className="h-3 w-3 animate-pulse" /> Saving…
-      </span>
-    );
-    if (cloudSaved) return (
-      <span className="flex items-center gap-1 text-xs text-green-600">
-        <Cloud className="h-3 w-3" /> Saved
-      </span>
-    );
-    return (
-      <span className="flex items-center gap-1 text-xs text-muted-foreground">
-        <CloudOff className="h-3 w-3" /> Unsaved
-      </span>
-    );
+    if (cloudSaving) return <span className="flex items-center gap-1 text-xs text-muted-foreground"><Save className="h-3 w-3 animate-pulse" /> Saving…</span>;
+    if (cloudSaved)  return <span className="flex items-center gap-1 text-xs text-green-600"><Cloud className="h-3 w-3" /> Saved</span>;
+    return <span className="flex items-center gap-1 text-xs text-muted-foreground"><CloudOff className="h-3 w-3" /> Unsaved</span>;
   };
 
   // ── Render ────────────────────────────────────────────────────────────────
-
   const fileBase = fileName.replace(/\.csv$/i, "");
 
   return (
     <div className="min-h-screen bg-background flex flex-col pb-16">
 
-      {/* Header */}
+      {/* ── Header ── */}
       <header className="bg-card border-b border-border shadow-sm sticky top-0 z-10">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex items-center justify-between gap-4 flex-wrap">
-          <div className="flex items-center gap-3">
-            <Link href="/more" className="text-muted-foreground hover:text-foreground transition-colors">
+
+        {/* Row 1: title + sessions button */}
+        <div className="px-4 sm:px-6 py-3 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3 min-w-0">
+            <Link href="/more" className="text-muted-foreground hover:text-foreground transition-colors flex-shrink-0">
               <ArrowLeft className="h-5 w-5" />
             </Link>
-            <div className="bg-primary text-primary-foreground p-2 rounded-lg">
-              <TrendingUp className="h-5 w-5" />
+            <div className="bg-primary text-primary-foreground p-1.5 rounded-lg flex-shrink-0">
+              <TrendingUp className="h-4 w-4" />
             </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <h1 className="text-xl font-bold text-foreground">Price Comparison</h1>
+            <div className="min-w-0">
+              <div className="flex items-center gap-2 flex-wrap">
+                <h1 className="text-lg font-bold text-foreground leading-tight">Price Comparison</h1>
                 <CloudStatus />
               </div>
-              <p className="text-xs text-muted-foreground">Compare your register prices against Michigan's current price book</p>
+              {currentSessionName && (
+                <p className="text-xs text-muted-foreground truncate max-w-[200px]">{currentSessionName}</p>
+              )}
             </div>
           </div>
 
-          <div className="flex items-center gap-2 flex-shrink-0 flex-wrap">
+          <div className="flex items-center gap-2 flex-shrink-0">
+            <Button variant="outline" size="sm" onClick={openSessions} className="flex items-center gap-1.5" data-testid="button-sessions">
+              <FolderOpen className="h-4 w-4" />
+              <span className="hidden sm:inline">Sessions</span>
+            </Button>
+          </div>
+        </div>
+
+        {/* Row 2: scrollable mode + action buttons */}
+        <div className="overflow-x-auto border-t border-border/50">
+          <div className="flex items-center gap-2 px-4 sm:px-6 py-2 min-w-max">
             {/* Mode toggle */}
             <div className="flex rounded-lg border border-border overflow-hidden">
-              <button
-                onClick={() => setPageMode("csv")}
-                data-testid="button-mode-csv"
-                className={`flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium transition-colors ${
-                  pageMode === "csv" ? "bg-primary text-primary-foreground" : "bg-card text-muted-foreground hover:bg-muted"
-                }`}
-              >
-                <FileText className="h-4 w-4" />
-                Full List
+              <button onClick={() => setPageMode("csv")} data-testid="button-mode-csv"
+                className={`flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium transition-colors ${pageMode === "csv" ? "bg-primary text-primary-foreground" : "bg-card text-muted-foreground hover:bg-muted"}`}>
+                <FileText className="h-4 w-4" />Full List
               </button>
-              <button
-                onClick={() => setPageMode("scan")}
-                data-testid="button-mode-scan"
-                className={`flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium transition-colors ${
-                  pageMode === "scan" ? "bg-primary text-primary-foreground" : "bg-card text-muted-foreground hover:bg-muted"
-                }`}
-              >
-                <Scan className="h-4 w-4" />
-                Scan Mode
+              <button onClick={() => setPageMode("scan")} data-testid="button-mode-scan"
+                className={`flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium transition-colors ${pageMode === "scan" ? "bg-primary text-primary-foreground" : "bg-card text-muted-foreground hover:bg-muted"}`}>
+                <Scan className="h-4 w-4" />Scan Mode
                 {scannedIndices.length > 0 && (
-                  <span className="ml-1 bg-primary-foreground text-primary text-xs rounded-full px-1.5 py-0.5 font-bold leading-none">
-                    {scannedIndices.length}
-                  </span>
+                  <span className="ml-1 bg-primary-foreground text-primary text-xs rounded-full px-1.5 py-0.5 font-bold leading-none">{scannedIndices.length}</span>
                 )}
               </button>
             </div>
 
-            {/* Full list export buttons */}
+            {/* Full list actions */}
             {pageMode === "csv" && rows.length > 0 && (
               <>
                 <Button variant="outline" size="sm" onClick={() => resetAllToMichigan(allRowsWithIdx)}>
-                  <RefreshCw className="h-4 w-4 mr-1" /> Reset all to MI
+                  <RefreshCw className="h-4 w-4 mr-1" />Reset all
                 </Button>
                 <Button variant="outline" size="sm" onClick={() => exportChangedOnly(false, fileBase)} data-testid="button-export-changed">
-                  <Download className="h-4 w-4 mr-1" /> Changed only ({totalChanged})
+                  <Download className="h-4 w-4 mr-1" />Changed ({totalChanged})
                 </Button>
                 <Button variant="outline" size="sm" onClick={() => doExport(rows, false, fileBase)}>
-                  <Download className="h-4 w-4 mr-1" /> Export all
+                  <Download className="h-4 w-4 mr-1" />Export all
                 </Button>
                 <Button size="sm" onClick={() => doExport(rows, true, fileBase)}>
-                  <Download className="h-4 w-4 mr-1" /> With Custom Names
+                  <Download className="h-4 w-4 mr-1" />Custom names
                 </Button>
               </>
             )}
 
-            {/* Scan mode export buttons */}
+            {/* Scan mode actions */}
             {pageMode === "scan" && scannedIndices.length > 0 && (
               <>
                 <Button variant="outline" size="sm" onClick={() => resetAllToMichigan(scannedRowsWithIdx)} data-testid="button-scan-reset">
-                  <RefreshCw className="h-4 w-4 mr-1" /> Reset to MI
+                  <RefreshCw className="h-4 w-4 mr-1" />Reset to MI
                 </Button>
                 <Button variant="outline" size="sm" onClick={() => doExport(scannedRowsWithIdx.map(x => x.row), false, "shelf_scan")} data-testid="button-scan-export">
-                  <Download className="h-4 w-4 mr-1" /> Export P-touch CSV
+                  <Download className="h-4 w-4 mr-1" />Export P-touch
                 </Button>
                 <Button size="sm" onClick={() => doExport(scannedRowsWithIdx.map(x => x.row), true, "shelf_scan")} data-testid="button-scan-export-custom">
-                  <Download className="h-4 w-4 mr-1" /> With Custom Names
+                  <Download className="h-4 w-4 mr-1" />Custom names
                 </Button>
               </>
             )}
@@ -797,267 +812,155 @@ export default function PriceComparePage() {
         {/* DB not loaded warning */}
         {dbEmpty && (
           <div className="flex items-start gap-3 bg-red-50 border border-red-200 rounded-lg px-4 py-4 text-sm text-red-800">
-            <AlertCircle className="h-5 w-5 mt-0.5 flex-shrink-0 text-red-500" />
+            <AlertCircle className="h-5 w-5 text-red-500 flex-shrink-0 mt-0.5" />
             <div>
               <p className="font-semibold">Michigan price book not loaded</p>
-              <p className="mt-1 text-red-700">
-                <Link href="/" className="underline font-medium hover:text-red-900">Go to the home page</Link>{" "}
-                to load it, then come back and upload your CSV.
-              </p>
+              <p className="mt-0.5">Go to <strong>More → Refresh Data</strong> to load 13,899 Michigan liquor records, then come back and upload your CSV.</p>
             </div>
           </div>
         )}
 
-        {/* Upload zone */}
-        <div
-          onDragOver={e => { e.preventDefault(); setDragOver(true); }}
-          onDragLeave={() => setDragOver(false)}
-          onDrop={onDrop}
-          onClick={() => fileInputRef.current?.click()}
-          data-testid="dropzone-csv"
-          className={`relative border-2 border-dashed rounded-xl cursor-pointer transition-all
-            ${dragOver ? "border-primary bg-primary/5 scale-[1.01]" : "border-border hover:border-primary/50 hover:bg-muted/30"}
-            ${rows.length > 0 ? "p-4" : "p-12"}`}
-        >
-          <input ref={fileInputRef} type="file" accept=".csv" className="hidden" onChange={onFileChange} />
-          <div className={`flex items-center gap-3 ${rows.length > 0 ? "justify-start" : "flex-col justify-center text-center"}`}>
-            {loading
-              ? <RefreshCw className={`text-primary animate-spin ${rows.length > 0 ? "h-5 w-5" : "h-10 w-10"}`} />
-              : <Upload className={`text-muted-foreground ${rows.length > 0 ? "h-5 w-5" : "h-10 w-10"}`} />
-            }
-            {rows.length > 0 ? (
-              <span className="text-sm text-muted-foreground">
-                {loading ? "Processing…" : <><strong>{fileName}</strong> · {rows.length} products loaded — drop a new CSV to replace</>}
-              </span>
-            ) : (
-              <div>
-                <p className="text-base font-medium text-foreground">
-                  {loading ? "Processing your CSV…" : "Drop your register P-touch CSV here"}
-                </p>
-                <p className="text-sm text-muted-foreground mt-1">
-                  Upload the file exported from your register — required for both Full List and Scan Mode
-                </p>
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* ══════════════ FULL LIST MODE ══════════════ */}
-        {pageMode === "csv" && rows.length > 0 && !loading && (
-          <>
-            {/* Summary strip */}
-            <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
-              <Card className="cursor-pointer hover:border-primary/50 transition-colors" onClick={() => setFilter("all")}>
-                <CardContent className="py-3 px-4 flex items-center gap-2">
-                  <CheckCircle className="h-4 w-4 text-primary" />
-                  <div>
-                    <p className="text-xl font-bold">{rows.length}</p>
-                    <p className="text-xs text-muted-foreground">Total products</p>
-                  </div>
-                </CardContent>
-              </Card>
-              <Card className="cursor-pointer hover:border-red-300 transition-colors" onClick={() => setFilter("increased")}>
-                <CardContent className="py-3 px-4 flex items-center gap-2">
-                  <TrendingUp className="h-4 w-4 text-red-500" />
-                  <div>
-                    <p className="text-xl font-bold text-red-600">{totalIncreased}</p>
-                    <p className="text-xs text-muted-foreground">Price increased</p>
-                  </div>
-                </CardContent>
-              </Card>
-              <Card className="cursor-pointer hover:border-green-300 transition-colors" onClick={() => setFilter("decreased")}>
-                <CardContent className="py-3 px-4 flex items-center gap-2">
-                  <TrendingDown className="h-4 w-4 text-green-500" />
-                  <div>
-                    <p className="text-xl font-bold text-green-600">{totalDecreased}</p>
-                    <p className="text-xs text-muted-foreground">Price decreased</p>
-                  </div>
-                </CardContent>
-              </Card>
-              <Card className="cursor-pointer hover:border-amber-300 transition-colors" onClick={() => setFilter("notfound")}>
-                <CardContent className="py-3 px-4 flex items-center gap-2">
-                  <AlertCircle className="h-4 w-4 text-amber-500" />
-                  <div>
-                    <p className="text-xl font-bold text-amber-600">{totalNotFound}</p>
-                    <p className="text-xs text-muted-foreground">Not in MI DB</p>
-                  </div>
-                </CardContent>
-              </Card>
-              <Card
-                className={`cursor-pointer transition-colors ${totalAmbiguous > 0 ? "hover:border-orange-400 border-orange-200 bg-orange-50/40" : "hover:border-muted"}`}
-                onClick={() => setFilter("ambiguous")}
-              >
-                <CardContent className="py-3 px-4 flex items-center gap-2">
-                  <HelpCircle className={`h-4 w-4 ${totalAmbiguous > 0 ? "text-orange-500" : "text-muted-foreground"}`} />
-                  <div>
-                    <p className={`text-xl font-bold ${totalAmbiguous > 0 ? "text-orange-600" : "text-muted-foreground"}`}>{totalAmbiguous}</p>
-                    <p className="text-xs text-muted-foreground">Need review</p>
-                  </div>
-                </CardContent>
-              </Card>
-            </div>
-
-            {/* Ambiguous banner */}
-            {totalAmbiguous > 0 && (
-              <div className="flex items-start gap-3 bg-orange-50 border border-orange-200 rounded-lg px-4 py-3 text-sm text-orange-800">
-                <AlertTriangle className="h-4 w-4 mt-0.5 flex-shrink-0 text-orange-500" />
-                <span>
-                  <strong>{totalAmbiguous} product{totalAmbiguous > 1 ? "s share" : " shares"} a UPC with multiple Michigan records.</strong>{" "}
-                  Click the orange <strong>?</strong> badge on any row to pick the correct match.
-                </span>
-              </div>
-            )}
-
-            {/* Filter + search bar */}
-            <div className="flex flex-wrap items-center gap-2">
-              {([
-                ["all",       `All (${rows.length})`],
-                ["increased", `↑ Up (${totalIncreased})`],
-                ["decreased", `↓ Down (${totalDecreased})`],
-                ["same",      `— Same (${totalSame})`],
-                ["notfound",  `? Not found (${totalNotFound})`],
-                ["ambiguous", `⚠ Review (${totalAmbiguous})`],
-              ] as [Filter, string][]).map(([f, label]) => (
-                <button
-                  key={f}
-                  onClick={() => setFilter(f)}
-                  className={`px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${
-                    filter === f
-                      ? f === "ambiguous" ? "bg-orange-500 text-white" : "bg-primary text-primary-foreground"
-                      : f === "ambiguous" && totalAmbiguous > 0
-                        ? "bg-orange-100 text-orange-700 hover:bg-orange-200"
-                        : "bg-muted text-muted-foreground hover:bg-muted/80"
-                  }`}
-                >
-                  {label}
-                </button>
-              ))}
-              <div className="ml-auto">
-                <Input
-                  placeholder="Search name, UPC, or liquor code…"
-                  value={search}
-                  onChange={e => setSearch(e.target.value)}
-                  className="h-8 w-60 text-sm"
-                />
-              </div>
-            </div>
-
-            {/* Table */}
-            <ComparisonTable rowsWithIdx={visible} />
-
-            {/* Footer */}
-            <div className="flex items-center justify-between text-xs text-muted-foreground px-1 flex-wrap gap-2">
-              <span>Showing {visible.length} of {rows.length} products</span>
-              <div className="flex gap-2 flex-wrap">
-                <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => exportChangedOnly(false, fileBase)}>
-                  <Download className="h-3 w-3 mr-1" /> Changed only ({totalChanged})
-                </Button>
-                <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => doExport(rows, false, fileBase)}>
-                  <Download className="h-3 w-3 mr-1" /> Export all
-                </Button>
-                <Button size="sm" className="h-7 text-xs" onClick={() => doExport(rows, true, fileBase)}>
-                  <Download className="h-3 w-3 mr-1" /> With Custom Names
-                </Button>
-              </div>
-            </div>
-          </>
-        )}
-
-        {/* ══════════════ SCAN MODE ══════════════ */}
-        {pageMode === "scan" && (
+        {/* ── CSV Mode ── */}
+        {pageMode === "csv" && (
           <div className="space-y-5">
-            {rows.length === 0 && !loading && (
-              <div className="flex items-start gap-3 bg-amber-50 border border-amber-200 rounded-lg px-4 py-4 text-sm text-amber-800">
-                <AlertCircle className="h-5 w-5 mt-0.5 flex-shrink-0 text-amber-500" />
-                <div>
-                  <p className="font-semibold">No CSV loaded yet</p>
-                  <p className="mt-1">Upload your register P-touch CSV above first. Scan mode finds each scanned bottle in your CSV and pulls it onto this list.</p>
-                </div>
+            {rows.length === 0 ? (
+              <div
+                onDragOver={e => { e.preventDefault(); setDragOver(true); }}
+                onDragLeave={() => setDragOver(false)}
+                onDrop={onDrop}
+                onClick={() => fileInputRef.current?.click()}
+                className={`border-2 border-dashed rounded-xl p-12 text-center cursor-pointer transition-colors ${dragOver ? "border-primary bg-primary/5" : "border-border hover:border-primary/50 hover:bg-muted/30"}`}
+              >
+                <Upload className="h-10 w-10 text-muted-foreground mx-auto mb-3" />
+                <p className="text-base font-medium text-foreground">Drop your register CSV here</p>
+                <p className="text-sm text-muted-foreground mt-1">or click to browse</p>
+                {loading && <p className="text-sm text-primary mt-3">Processing…</p>}
+                <input ref={fileInputRef} type="file" accept=".csv" className="hidden" onChange={onFileChange} />
               </div>
-            )}
-
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
-              <div className="lg:col-span-1">
-                <BarcodeScanner
-                  onScan={handleBarcodeScan}
-                  isActive={scannerActive}
-                  onToggle={() => setScannerActive(a => !a)}
-                />
-              </div>
-
-              <div className="lg:col-span-2 space-y-3">
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-                  <Card>
-                    <CardContent className="py-3 px-4 flex items-center gap-2">
-                      <Package className="h-4 w-4 text-primary" />
-                      <div>
-                        <p className="text-xl font-bold">{scannedIndices.length}</p>
-                        <p className="text-xs text-muted-foreground">Bottles scanned</p>
-                      </div>
-                    </CardContent>
-                  </Card>
-                  <Card>
-                    <CardContent className="py-3 px-4 flex items-center gap-2">
-                      <TrendingUp className="h-4 w-4 text-red-500" />
-                      <div>
-                        <p className="text-xl font-bold text-red-600">{scanIncreased}</p>
-                        <p className="text-xs text-muted-foreground">Price up in MI</p>
-                      </div>
-                    </CardContent>
-                  </Card>
-                  <Card>
-                    <CardContent className="py-3 px-4 flex items-center gap-2">
-                      <TrendingDown className="h-4 w-4 text-green-500" />
-                      <div>
-                        <p className="text-xl font-bold text-green-600">{scanDecreased}</p>
-                        <p className="text-xs text-muted-foreground">Price down in MI</p>
-                      </div>
-                    </CardContent>
-                  </Card>
+            ) : (
+              <>
+                <div className="flex items-center justify-between gap-3 flex-wrap">
+                  <div className="flex items-center gap-2 text-sm text-muted-foreground flex-wrap">
+                    <Package className="h-4 w-4" />
+                    <span><strong>{rows.length}</strong> products</span>
+                    <span>·</span>
+                    <span className="text-foreground font-medium truncate max-w-[180px]">{fileName}</span>
+                  </div>
+                  <Button variant="outline" size="sm" onClick={() => fileInputRef.current?.click()} className="flex-shrink-0">
+                    <Upload className="h-4 w-4 mr-1" />New CSV
+                  </Button>
+                  <input ref={fileInputRef} type="file" accept=".csv" className="hidden" onChange={onFileChange} />
                 </div>
 
-                {scanAmbiguous > 0 && (
+                {/* Summary cards */}
+                <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+                  {[
+                    { label: "Increased", count: totalIncreased, icon: <TrendingUp className="h-4 w-4 text-red-500" />, color: "text-red-600", active: filter === "increased", f: "increased" as Filter },
+                    { label: "Decreased", count: totalDecreased, icon: <TrendingDown className="h-4 w-4 text-green-500" />, color: "text-green-600", active: filter === "decreased", f: "decreased" as Filter },
+                    { label: "Same",      count: totalSame,      icon: <CheckCircle className="h-4 w-4 text-blue-500" />,   color: "text-blue-600",  active: filter === "same",      f: "same" as Filter },
+                    { label: "Not found", count: totalNotFound,  icon: <AlertCircle className="h-4 w-4 text-amber-500" />, color: "text-amber-600", active: filter === "notfound",  f: "notfound" as Filter },
+                    { label: "Ambiguous", count: totalAmbiguous, icon: <HelpCircle className="h-4 w-4 text-orange-500" />, color: "text-orange-600", active: filter === "ambiguous", f: "ambiguous" as Filter },
+                  ].map(({ label, count, icon, color, active, f }) => (
+                    <Card key={f} onClick={() => setFilter(active ? "all" : f)}
+                      className={`cursor-pointer transition-all select-none ${active ? "ring-2 ring-primary" : "hover:shadow-sm"}`}>
+                      <CardContent className="py-3 px-4 flex items-center gap-2">
+                        {icon}
+                        <div>
+                          <p className={`text-xl font-bold ${color}`}>{count}</p>
+                          <p className="text-xs text-muted-foreground">{label}</p>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  ))}
+                </div>
+
+                {totalAmbiguous > 0 && (
                   <div className="flex items-start gap-3 bg-orange-50 border border-orange-200 rounded-lg px-4 py-3 text-sm text-orange-800">
                     <AlertTriangle className="h-4 w-4 mt-0.5 flex-shrink-0 text-orange-500" />
-                    <span>
-                      <strong>{scanAmbiguous} scanned item{scanAmbiguous > 1 ? "s have" : " has"} multiple Michigan matches.</strong>{" "}
-                      Click the <strong>?</strong> badge to resolve.
-                    </span>
+                    <span><strong>{totalAmbiguous} product{totalAmbiguous > 1 ? "s have" : " has"} multiple Michigan matches.</strong> Click the <strong>Pick match</strong> badge in the table to resolve.</span>
                   </div>
                 )}
 
-                {scannedIndices.length > 0 && (
-                  <div className="flex gap-2 flex-wrap">
-                    <Input
-                      placeholder="Search scanned items…"
-                      value={scanSearch}
-                      onChange={e => setScanSearch(e.target.value)}
-                      className="h-8 w-52 text-sm"
-                    />
-                    <Button variant="outline" size="sm" onClick={() => setScannedIndices([])} data-testid="button-scan-clear">
-                      <Trash2 className="h-4 w-4 mr-1" /> Clear list
+                <div className="flex gap-2 flex-wrap">
+                  <Input placeholder="Search by name, UPC, or code…" value={search} onChange={e => setSearch(e.target.value)} className="h-8 w-64 text-sm" />
+                  {filter !== "all" && (
+                    <Button variant="ghost" size="sm" onClick={() => setFilter("all")} className="h-8 text-xs text-muted-foreground">
+                      Clear filter
                     </Button>
-                  </div>
-                )}
+                  )}
+                  <span className="ml-auto text-xs text-muted-foreground self-center">{visible.length} of {rows.length}</span>
+                </div>
+
+                <ComparisonTable rowsWithIdx={visible} />
+              </>
+            )}
+          </div>
+        )}
+
+        {/* ── Scan Mode ── */}
+        {pageMode === "scan" && (
+          <div className="space-y-5">
+            <BarcodeScanner onScan={handleBarcodeScan} isActive={scannerActive} onToggle={() => setScannerActive(p => !p)} />
+
+            <div className="space-y-3">
+              <div className="flex flex-wrap gap-3">
+                <Card className="flex-1 min-w-[100px]">
+                  <CardContent className="py-3 px-4 flex items-center gap-2">
+                    <Package className="h-4 w-4 text-muted-foreground" />
+                    <div>
+                      <p className="text-xl font-bold">{scannedIndices.length}</p>
+                      <p className="text-xs text-muted-foreground">Scanned</p>
+                    </div>
+                  </CardContent>
+                </Card>
+                <Card className="flex-1 min-w-[100px]">
+                  <CardContent className="py-3 px-4 flex items-center gap-2">
+                    <TrendingUp className="h-4 w-4 text-red-500" />
+                    <div>
+                      <p className="text-xl font-bold text-red-600">{scanIncreased}</p>
+                      <p className="text-xs text-muted-foreground">Price up</p>
+                    </div>
+                  </CardContent>
+                </Card>
+                <Card className="flex-1 min-w-[100px]">
+                  <CardContent className="py-3 px-4 flex items-center gap-2">
+                    <TrendingDown className="h-4 w-4 text-green-500" />
+                    <div>
+                      <p className="text-xl font-bold text-green-600">{scanDecreased}</p>
+                      <p className="text-xs text-muted-foreground">Price down</p>
+                    </div>
+                  </CardContent>
+                </Card>
               </div>
+
+              {scanAmbiguous > 0 && (
+                <div className="flex items-start gap-3 bg-orange-50 border border-orange-200 rounded-lg px-4 py-3 text-sm text-orange-800">
+                  <AlertTriangle className="h-4 w-4 mt-0.5 flex-shrink-0 text-orange-500" />
+                  <span><strong>{scanAmbiguous} scanned item{scanAmbiguous > 1 ? "s have" : " has"} multiple Michigan matches.</strong> Click the <strong>?</strong> badge to resolve.</span>
+                </div>
+              )}
+
+              {scannedIndices.length > 0 && (
+                <div className="flex gap-2 flex-wrap">
+                  <Input placeholder="Search scanned items…" value={scanSearch} onChange={e => setScanSearch(e.target.value)} className="h-8 w-52 text-sm" />
+                  <Button variant="outline" size="sm" onClick={() => setScannedIndices([])} data-testid="button-scan-clear">
+                    <Trash2 className="h-4 w-4 mr-1" />Clear list
+                  </Button>
+                </div>
+              )}
             </div>
 
             {scannedIndices.length > 0 && (
               <>
-                <ComparisonTable
-                  rowsWithIdx={scannedRowsWithIdx}
-                  emptyLabel="No scanned items match your search."
-                  showRemove
-                  onRemove={removeFromScanList}
-                />
+                <ComparisonTable rowsWithIdx={scannedRowsWithIdx} emptyLabel="No scanned items match your search." showRemove onRemove={removeFromScanList} />
                 <div className="flex items-center justify-between text-xs text-muted-foreground px-1 flex-wrap gap-2">
                   <span>{scannedIndices.length} item{scannedIndices.length !== 1 ? "s" : ""} in scan list</span>
                   <div className="flex gap-2">
                     <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => doExport(scannedRowsWithIdx.map(x => x.row), false, "shelf_scan")}>
-                      <Download className="h-3 w-3 mr-1" /> Export P-touch CSV
+                      <Download className="h-3 w-3 mr-1" />Export P-touch CSV
                     </Button>
                     <Button size="sm" className="h-7 text-xs" onClick={() => doExport(scannedRowsWithIdx.map(x => x.row), true, "shelf_scan")}>
-                      <Download className="h-3 w-3 mr-1" /> With Custom Names
+                      <Download className="h-3 w-3 mr-1" />With Custom Names
                     </Button>
                   </div>
                 </div>
@@ -1068,14 +971,73 @@ export default function PriceComparePage() {
               <div className="flex flex-col items-center justify-center py-16 text-center text-muted-foreground gap-3">
                 <Scan className="h-12 w-12 opacity-30" />
                 <p className="text-base font-medium">Start scanning bottles</p>
-                <p className="text-sm max-w-sm">Scan a bottle's barcode and it will be pulled from your CSV onto this list so you can compare prices and export just those items.</p>
+                <p className="text-sm max-w-sm">Scan a bottle's barcode and it will be pulled from your CSV onto this list.</p>
               </div>
             )}
           </div>
         )}
       </main>
 
-      {/* Disambiguation dialog */}
+      {/* ── Sessions Dialog ── */}
+      <Dialog open={sessionsOpen} onOpenChange={setSessionsOpen}>
+        <DialogContent className="max-w-md w-[95vw]">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <FolderOpen className="h-5 w-5" />
+              Saved Sessions
+            </DialogTitle>
+            <DialogDescription>
+              Load a previous comparison or start a new one.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-3">
+            <Button variant="outline" className="w-full flex items-center gap-2" onClick={handleNewSession} data-testid="button-new-session">
+              <Plus className="h-4 w-4" />
+              Start new session
+            </Button>
+
+            {sessionsLoading && (
+              <div className="flex items-center justify-center py-6">
+                <div className="h-5 w-5 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+              </div>
+            )}
+
+            {!sessionsLoading && cloudSessions.length === 0 && (
+              <p className="text-sm text-center text-muted-foreground py-4">No saved sessions yet.</p>
+            )}
+
+            {!sessionsLoading && cloudSessions.length > 0 && (
+              <div className="space-y-2 max-h-[50vh] overflow-y-auto pr-1">
+                {cloudSessions.map(s => (
+                  <div key={s.id}
+                    className={`flex items-start gap-3 rounded-lg border px-3 py-2.5 ${s.id === currentSessionId ? "border-primary bg-primary/5" : "border-border"}`}>
+                    <div className="flex-1 min-w-0">
+                      <p className="font-medium text-sm text-foreground truncate">{s.sessionName}</p>
+                      <p className="text-xs text-muted-foreground truncate">{s.fileName}</p>
+                      <p className="text-xs text-muted-foreground flex items-center gap-1 mt-0.5">
+                        <Clock className="h-3 w-3" />{fmtDate(s.updatedAt)}
+                        {s.id === currentSessionId && <span className="ml-1 text-primary font-medium">· active</span>}
+                      </p>
+                    </div>
+                    <div className="flex gap-1 flex-shrink-0">
+                      <Button size="sm" variant="outline" className="h-7 text-xs px-2" onClick={() => handleLoadSession(s)}>
+                        Load
+                      </Button>
+                      <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive"
+                        onClick={() => handleDeleteSession(s.id)}>
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Disambiguation Dialog ── */}
       <Dialog open={!!disambigRow} onOpenChange={open => { if (!open) setDisambigRow(null); }}>
         <DialogContent className="max-w-lg">
           <DialogHeader>
@@ -1085,31 +1047,23 @@ export default function PriceComparePage() {
             </DialogTitle>
             <DialogDescription>
               UPC <span className="font-mono">{disambigRow?.row.upc}</span> matches{" "}
-              {disambigRow?.row.allMatches?.length ?? 0} products in the Michigan price book.
-              Pick the one that matches <strong>{disambigRow?.row.name}</strong> on your register.
+              {disambigRow?.row.allMatches?.length ?? 0} products. Pick the one that matches <strong>{disambigRow?.row.name}</strong>.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-2 max-h-[60vh] overflow-y-auto pr-1">
             {disambigRow?.row.allMatches?.map((match, i) => {
               const miPrice = match.shelfPrice ?? null;
-              const diff = miPrice !== null
-                ? Math.round((miPrice - disambigRow.row.registerPrice) * 100) / 100
-                : null;
-              const isCurrentMatch = disambigRow.row.resolvedByUser
-                && disambigRow.row.michiganName === `${match.brandName} ${match.bottleSize}`;
+              const diff    = miPrice !== null ? Math.round((miPrice - disambigRow.row.registerPrice) * 100) / 100 : null;
+              const isCurr  = disambigRow.row.resolvedByUser && disambigRow.row.michiganName === `${match.brandName} ${match.bottleSize}`;
               return (
-                <button
-                  key={i}
-                  onClick={() => applyMatch(disambigRow.origIdx, match)}
-                  className={`w-full text-left rounded-lg border px-4 py-3 transition-colors
-                    ${isCurrentMatch ? "border-primary bg-primary/5" : "border-border hover:border-primary/50 hover:bg-muted/40"}`}
-                >
+                <button key={i} onClick={() => applyMatch(disambigRow.origIdx, match)}
+                  className={`w-full text-left rounded-lg border px-4 py-3 transition-colors ${isCurr ? "border-primary bg-primary/5" : "border-border hover:border-primary/50 hover:bg-muted/40"}`}>
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0 flex-1">
                       <p className="font-semibold text-foreground leading-tight">{match.brandName}</p>
                       <p className="text-sm text-muted-foreground mt-0.5">
                         {match.bottleSize}
-                        {match.liquorCode ? <span className="ml-2 font-mono text-xs">#{match.liquorCode}</span> : null}
+                        {match.liquorCode && <span className="ml-2 font-mono text-xs">#{match.liquorCode}</span>}
                       </p>
                     </div>
                     <div className="text-right flex-shrink-0">
@@ -1122,9 +1076,7 @@ export default function PriceComparePage() {
                             </p>
                           )}
                         </>
-                      ) : (
-                        <p className="text-sm text-muted-foreground">No price</p>
-                      )}
+                      ) : <p className="text-sm text-muted-foreground">No price</p>}
                     </div>
                   </div>
                 </button>

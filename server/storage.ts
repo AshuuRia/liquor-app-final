@@ -56,8 +56,10 @@ export interface IStorage {
   getCustomNameByUpc(upcCode: string, userId?: string): Promise<string | undefined>;
 
   // Price compare sessions (persisted, user-scoped)
-  savePriceCompareSession(userId: string, fileName: string, rowsJson: string): Promise<PriceCompareSession>;
-  getPriceCompareSession(userId: string): Promise<PriceCompareSession | undefined>;
+  savePriceCompareSession(userId: string, sessionId: string | null, sessionName: string, fileName: string, rowsJson: string): Promise<PriceCompareSession>;
+  listPriceCompareSessions(userId: string): Promise<Pick<PriceCompareSession, 'id' | 'sessionName' | 'fileName' | 'updatedAt'>[]>;
+  getPriceCompareSession(userId: string, sessionId: string): Promise<PriceCompareSession | undefined>;
+  deletePriceCompareSession(sessionId: string): Promise<boolean>;
 }
 
 // ── DatabaseStorage ───────────────────────────────────────────────────────────
@@ -285,32 +287,44 @@ export class DatabaseStorage implements IStorage {
 
   // ── Price compare sessions ─────────────────────────────────────────────────
 
-  async savePriceCompareSession(userId: string, fileName: string, rowsJson: string): Promise<PriceCompareSession> {
-    // Upsert: one saved session per user (replace existing)
-    const existing = await this.db.select({ id: priceCompareSessions.id })
-      .from(priceCompareSessions)
-      .where(eq(priceCompareSessions.userId, userId))
-      .limit(1);
-
-    if (existing.length > 0) {
+  async savePriceCompareSession(userId: string, sessionId: string | null, sessionName: string, fileName: string, rowsJson: string): Promise<PriceCompareSession> {
+    if (sessionId) {
       const r = await this.db.update(priceCompareSessions)
-        .set({ fileName, rowsJson, updatedAt: new Date() })
-        .where(eq(priceCompareSessions.userId, userId))
+        .set({ sessionName, fileName, rowsJson, updatedAt: new Date() })
+        .where(and(eq(priceCompareSessions.id, sessionId), eq(priceCompareSessions.userId, userId)))
         .returning();
-      return r[0];
+      if (r.length) return r[0];
     }
-
     const r = await this.db.insert(priceCompareSessions)
-      .values({ userId, fileName, rowsJson })
+      .values({ userId, sessionName, fileName, rowsJson })
       .returning();
     return r[0];
   }
 
-  async getPriceCompareSession(userId: string): Promise<PriceCompareSession | undefined> {
-    const r = await this.db.select().from(priceCompareSessions)
+  async listPriceCompareSessions(userId: string): Promise<Pick<PriceCompareSession, 'id' | 'sessionName' | 'fileName' | 'updatedAt'>[]> {
+    return await this.db.select({
+      id: priceCompareSessions.id,
+      sessionName: priceCompareSessions.sessionName,
+      fileName: priceCompareSessions.fileName,
+      updatedAt: priceCompareSessions.updatedAt,
+    })
+      .from(priceCompareSessions)
       .where(eq(priceCompareSessions.userId, userId))
+      .orderBy(desc(priceCompareSessions.updatedAt));
+  }
+
+  async getPriceCompareSession(userId: string, sessionId: string): Promise<PriceCompareSession | undefined> {
+    const r = await this.db.select().from(priceCompareSessions)
+      .where(and(eq(priceCompareSessions.id, sessionId), eq(priceCompareSessions.userId, userId)))
       .limit(1);
     return r[0];
+  }
+
+  async deletePriceCompareSession(sessionId: string): Promise<boolean> {
+    const r = await this.db.delete(priceCompareSessions)
+      .where(eq(priceCompareSessions.id, sessionId))
+      .returning();
+    return r.length > 0;
   }
 }
 
@@ -497,21 +511,35 @@ export class MemStorage implements IStorage {
     return undefined;
   }
 
-  async savePriceCompareSession(userId: string, fileName: string, rowsJson: string): Promise<PriceCompareSession> {
-    const existing = this.priceCompareMap.get(userId);
-    if (existing) {
-      const updated = { ...existing, fileName, rowsJson, updatedAt: new Date() };
-      this.priceCompareMap.set(userId, updated);
-      return updated;
+  async savePriceCompareSession(userId: string, sessionId: string | null, sessionName: string, fileName: string, rowsJson: string): Promise<PriceCompareSession> {
+    if (sessionId) {
+      const existing = this.priceCompareMap.get(sessionId);
+      if (existing && existing.userId === userId) {
+        const updated = { ...existing, sessionName, fileName, rowsJson, updatedAt: new Date() };
+        this.priceCompareMap.set(sessionId, updated);
+        return updated;
+      }
     }
     const id = randomUUID();
-    const s: PriceCompareSession = { id, userId, fileName, rowsJson, createdAt: new Date(), updatedAt: new Date() };
-    this.priceCompareMap.set(userId, s);
+    const s: PriceCompareSession = { id, userId, sessionName, fileName, rowsJson, createdAt: new Date(), updatedAt: new Date() };
+    this.priceCompareMap.set(id, s);
     return s;
   }
 
-  async getPriceCompareSession(userId: string): Promise<PriceCompareSession | undefined> {
-    return this.priceCompareMap.get(userId);
+  async listPriceCompareSessions(userId: string): Promise<Pick<PriceCompareSession, 'id' | 'sessionName' | 'fileName' | 'updatedAt'>[]> {
+    return Array.from(this.priceCompareMap.values())
+      .filter(s => s.userId === userId)
+      .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
+      .map(({ id, sessionName, fileName, updatedAt }) => ({ id, sessionName, fileName, updatedAt }));
+  }
+
+  async getPriceCompareSession(userId: string, sessionId: string): Promise<PriceCompareSession | undefined> {
+    const s = this.priceCompareMap.get(sessionId);
+    return s?.userId === userId ? s : undefined;
+  }
+
+  async deletePriceCompareSession(sessionId: string): Promise<boolean> {
+    return this.priceCompareMap.delete(sessionId);
   }
 }
 
