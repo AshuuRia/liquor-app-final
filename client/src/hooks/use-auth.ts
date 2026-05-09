@@ -1,6 +1,13 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import type { User } from "@shared/models/auth";
 import { isClerkMode, getClerk, getClerkToken } from "@/lib/clerk";
+
+export interface User {
+  id: string;
+  email?: string | null;
+  firstName?: string | null;
+  lastName?: string | null;
+  profileImageUrl?: string | null;
+}
 
 async function fetchUser(): Promise<User | null> {
   const headers: Record<string, string> = {};

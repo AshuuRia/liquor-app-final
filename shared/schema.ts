@@ -3,9 +3,6 @@ import { pgTable, text, varchar, real, integer, timestamp } from "drizzle-orm/pg
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
-// Export Replit Auth models (users + http_sessions tables)
-export * from "./models/auth";
-
 // Liquor record schema based on fixed-width format
 export const liquorRecords = pgTable("liquor_records", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
