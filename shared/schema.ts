@@ -120,6 +120,15 @@ export const insertPriceCompareSessionSchema = createInsertSchema(priceCompareSe
 export type InsertPriceCompareSession = z.infer<typeof insertPriceCompareSessionSchema>;
 export type PriceCompareSession = typeof priceCompareSessions.$inferSelect;
 
+// Price book changes — imported from Michigan Excel price book
+export const priceBookChanges = pgTable("price_book_changes", {
+  liquorCode: text("liquor_code").primaryKey(),
+  newChng: text("new_chng"),  // null=no change, "new"=new product, "1.50"/"-1.50"=price delta
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export type PriceBookChange = typeof priceBookChanges.$inferSelect;
+
 // Barcode scan result schema
 export const barcodeScanResult = z.object({
   success: z.boolean(),

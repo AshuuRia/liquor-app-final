@@ -1,13 +1,13 @@
 import postgres from 'postgres';
 import { drizzle } from 'drizzle-orm/postgres-js';
-import { eq, or, sql, ilike, and, desc } from 'drizzle-orm';
+import { eq, or, sql, ilike, and, desc, inArray } from 'drizzle-orm';
 import {
   type LiquorRecord, type InsertLiquorRecord,
   type ScannedItem, type InsertScannedItem,
   type Session, type InsertSession,
   type CustomNameMapping, type InsertCustomNameMapping,
   type PriceCompareSession, type InsertPriceCompareSession,
-  liquorRecords, scannedItems, sessions, customNameMappings, priceCompareSessions,
+  liquorRecords, scannedItems, sessions, customNameMappings, priceCompareSessions, priceBookChanges,
 } from "@shared/schema";
 import { randomUUID } from "crypto";
 
@@ -60,6 +60,12 @@ export interface IStorage {
   listPriceCompareSessions(userId: string): Promise<Pick<PriceCompareSession, 'id' | 'sessionName' | 'fileName' | 'updatedAt'>[]>;
   getPriceCompareSession(userId: string, sessionId: string): Promise<PriceCompareSession | undefined>;
   deletePriceCompareSession(sessionId: string): Promise<boolean>;
+
+  // Price book changes (from Michigan Excel price book)
+  getPriceChange(liquorCode: string): Promise<string | null>;
+  getPriceChangeBatch(liquorCodes: string[]): Promise<Map<string, string | null>>;
+  bulkUpsertPriceChanges(changes: Array<{ liquorCode: string; newChng: string | null }>): Promise<void>;
+  clearPriceBookChanges(): Promise<void>;
 }
 
 // ── DatabaseStorage ───────────────────────────────────────────────────────────
@@ -326,6 +332,40 @@ export class DatabaseStorage implements IStorage {
       .returning();
     return r.length > 0;
   }
+
+  // ── Price book changes ─────────────────────────────────────────────────────
+
+  async getPriceChange(liquorCode: string): Promise<string | null> {
+    const r = await this.db.select().from(priceBookChanges)
+      .where(eq(priceBookChanges.liquorCode, liquorCode)).limit(1);
+    return r[0]?.newChng ?? null;
+  }
+
+  async getPriceChangeBatch(liquorCodes: string[]): Promise<Map<string, string | null>> {
+    const map = new Map<string, string | null>();
+    if (!liquorCodes.length) return map;
+    const rows = await this.db.select().from(priceBookChanges)
+      .where(inArray(priceBookChanges.liquorCode, liquorCodes));
+    for (const row of rows) map.set(row.liquorCode, row.newChng ?? null);
+    return map;
+  }
+
+  async bulkUpsertPriceChanges(changes: Array<{ liquorCode: string; newChng: string | null }>): Promise<void> {
+    const CHUNK = 200;
+    for (let i = 0; i < changes.length; i += CHUNK) {
+      const chunk = changes.slice(i, i + CHUNK);
+      await this.db.insert(priceBookChanges)
+        .values(chunk.map(c => ({ liquorCode: c.liquorCode, newChng: c.newChng })))
+        .onConflictDoUpdate({
+          target: priceBookChanges.liquorCode,
+          set: { newChng: sql`excluded.new_chng`, updatedAt: sql`now()` },
+        });
+    }
+  }
+
+  async clearPriceBookChanges(): Promise<void> {
+    await this.db.delete(priceBookChanges);
+  }
 }
 
 // ── MemStorage (fallback) ─────────────────────────────────────────────────────
@@ -540,6 +580,30 @@ export class MemStorage implements IStorage {
 
   async deletePriceCompareSession(sessionId: string): Promise<boolean> {
     return this.priceCompareMap.delete(sessionId);
+  }
+
+  // ── Price book changes ─────────────────────────────────────────────────────
+
+  private priceChangesMap = new Map<string, string | null>();
+
+  async getPriceChange(liquorCode: string): Promise<string | null> {
+    return this.priceChangesMap.has(liquorCode) ? (this.priceChangesMap.get(liquorCode) ?? null) : null;
+  }
+
+  async getPriceChangeBatch(liquorCodes: string[]): Promise<Map<string, string | null>> {
+    const map = new Map<string, string | null>();
+    for (const code of liquorCodes) {
+      if (this.priceChangesMap.has(code)) map.set(code, this.priceChangesMap.get(code) ?? null);
+    }
+    return map;
+  }
+
+  async bulkUpsertPriceChanges(changes: Array<{ liquorCode: string; newChng: string | null }>): Promise<void> {
+    for (const c of changes) this.priceChangesMap.set(c.liquorCode, c.newChng);
+  }
+
+  async clearPriceBookChanges(): Promise<void> {
+    this.priceChangesMap.clear();
   }
 }
 

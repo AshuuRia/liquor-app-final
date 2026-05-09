@@ -1,7 +1,9 @@
 import { useState, useRef, useEffect } from "react";
-import { Search, X, Package, ChevronRight } from "lucide-react";
+import { Search, X, Package, ChevronRight, TrendingUp, TrendingDown, Sparkles } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import type { LiquorRecord } from "@shared/schema";
+
+type LiquorRecordWithChange = LiquorRecord & { priceChange?: string | null };
 
 function fmt(price: number | string | null) {
   if (price == null) return "—";
@@ -9,7 +11,43 @@ function fmt(price: number | string | null) {
   return isNaN(n) ? "—" : `$${n.toFixed(2)}`;
 }
 
-function DetailSheet({ record, onClose }: { record: LiquorRecord; onClose: () => void }) {
+function PriceChangeBadge({ change }: { change: string | null | undefined }) {
+  if (!change) return null;
+
+  if (change === "new") {
+    return (
+      <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-teal-100 dark:bg-teal-900/40 text-teal-700 dark:text-teal-300 text-xs font-bold">
+        <Sparkles className="h-3 w-3" />
+        New
+      </span>
+    );
+  }
+
+  const num = parseFloat(change);
+  if (isNaN(num)) return null;
+
+  if (num > 0) {
+    return (
+      <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-300 text-xs font-bold">
+        <TrendingUp className="h-3 w-3" />
+        +${num.toFixed(2)}
+      </span>
+    );
+  }
+
+  if (num < 0) {
+    return (
+      <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-300 text-xs font-bold">
+        <TrendingDown className="h-3 w-3" />
+        -${Math.abs(num).toFixed(2)}
+      </span>
+    );
+  }
+
+  return null;
+}
+
+function DetailSheet({ record, onClose }: { record: LiquorRecordWithChange; onClose: () => void }) {
   return (
     <div className="fixed inset-0 z-50 flex items-end bg-black/40" onClick={onClose}>
       <div
@@ -21,7 +59,7 @@ function DetailSheet({ record, onClose }: { record: LiquorRecord; onClose: () =>
           <div className="w-10 h-1 rounded-full bg-zinc-300 dark:bg-zinc-600" />
         </div>
         <div className="px-5 pb-4">
-          <div className="flex items-start justify-between gap-3 mb-4">
+          <div className="flex items-start justify-between gap-3 mb-3">
             <div className="flex-1 min-w-0">
               <h2 className="text-xl font-bold text-zinc-900 dark:text-zinc-100 leading-tight">{record.brandName}</h2>
               <p className="text-sm text-zinc-500 dark:text-zinc-400 mt-0.5">{record.vendorName}</p>
@@ -33,6 +71,13 @@ function DetailSheet({ record, onClose }: { record: LiquorRecord; onClose: () =>
               <X className="h-4 w-4 text-zinc-600 dark:text-zinc-300" />
             </button>
           </div>
+
+          {/* Price change badge */}
+          {record.priceChange && (
+            <div className="mb-4">
+              <PriceChangeBadge change={record.priceChange} />
+            </div>
+          )}
 
           <div className="flex gap-3 mb-5">
             <div className="flex-1 bg-blue-50 dark:bg-blue-900/30 rounded-xl p-3 text-center">
@@ -75,10 +120,10 @@ function DetailSheet({ record, onClose }: { record: LiquorRecord; onClose: () =>
 
 export default function SearchPage() {
   const [query, setQuery]       = useState("");
-  const [results, setResults]   = useState<LiquorRecord[]>([]);
+  const [results, setResults]   = useState<LiquorRecordWithChange[]>([]);
   const [total, setTotal]       = useState(0);
   const [loading, setLoading]   = useState(false);
-  const [selected, setSelected] = useState<LiquorRecord | null>(null);
+  const [selected, setSelected] = useState<LiquorRecordWithChange | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout>>();
   const inputRef    = useRef<HTMLInputElement>(null);
 
@@ -168,7 +213,10 @@ export default function SearchPage() {
                   className="w-full bg-white dark:bg-zinc-900 rounded-xl px-4 py-3.5 text-left flex items-center gap-3 shadow-sm active:bg-zinc-50"
                 >
                   <div className="flex-1 min-w-0">
-                    <div className="font-semibold text-sm text-zinc-900 dark:text-zinc-100 truncate">{item.brandName}</div>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-semibold text-sm text-zinc-900 dark:text-zinc-100 truncate">{item.brandName}</span>
+                      {item.priceChange && <PriceChangeBadge change={item.priceChange} />}
+                    </div>
                     <div className="flex items-center gap-2 mt-0.5 flex-wrap">
                       <span className="text-xs text-zinc-500">{item.bottleSize}</span>
                       {item.proof && <span className="text-xs text-zinc-400">{item.proof}°</span>}

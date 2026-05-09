@@ -5,7 +5,7 @@ import { DecodeHintType } from "@zxing/library";
 import { scanImageData, setModuleArgs } from "@undecaf/zbar-wasm";
 // @ts-ignore
 import zbarWasmUrl from "@undecaf/zbar-wasm/dist/zbar.wasm?url";
-import { X, Flashlight, Search, ScanLine, RotateCcw } from "lucide-react";
+import { X, Search, ScanLine, RotateCcw, TrendingUp, TrendingDown, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import type { LiquorRecord } from "@shared/schema";
@@ -53,9 +53,9 @@ function normalizeBarcode(raw: string): string {
 }
 
 interface ProductInfo {
-  record: LiquorRecord;
+  record: LiquorRecord & { priceChange?: string | null };
   barcode: string;
-  multiple?: LiquorRecord[];
+  multiple?: Array<LiquorRecord & { priceChange?: string | null }>;
 }
 
 function fmt(price: number | string | null) {
@@ -64,10 +64,46 @@ function fmt(price: number | string | null) {
   return isNaN(n) ? "—" : `$${n.toFixed(2)}`;
 }
 
+function PriceChangeBadge({ change }: { change: string | null | undefined }) {
+  if (!change) return null;
+
+  if (change === "new") {
+    return (
+      <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-teal-100 dark:bg-teal-900/40 text-teal-700 dark:text-teal-300 text-xs font-bold">
+        <Sparkles className="h-3 w-3" />
+        New
+      </span>
+    );
+  }
+
+  const num = parseFloat(change);
+  if (isNaN(num)) return null;
+
+  if (num > 0) {
+    return (
+      <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-300 text-xs font-bold">
+        <TrendingUp className="h-3 w-3" />
+        +${num.toFixed(2)}
+      </span>
+    );
+  }
+
+  if (num < 0) {
+    return (
+      <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-300 text-xs font-bold">
+        <TrendingDown className="h-3 w-3" />
+        -${Math.abs(num).toFixed(2)}
+      </span>
+    );
+  }
+
+  return null;
+}
+
 function ProductSheet({ info, onClose, onPickMultiple }: {
   info: ProductInfo;
   onClose: () => void;
-  onPickMultiple?: (rec: LiquorRecord) => void;
+  onPickMultiple?: (rec: LiquorRecord & { priceChange?: string | null }) => void;
 }) {
   const r = info.record;
   const hasMultiple = info.multiple && info.multiple.length > 1;
@@ -85,7 +121,7 @@ function ProductSheet({ info, onClose, onPickMultiple }: {
         </div>
 
         <div className="px-5 pb-4">
-          <div className="flex items-start justify-between gap-3 mb-4">
+          <div className="flex items-start justify-between gap-3 mb-3">
             <div className="flex-1 min-w-0">
               <h2 className="text-xl font-bold text-zinc-900 dark:text-zinc-100 leading-tight">
                 {r.brandName}
@@ -100,6 +136,13 @@ function ProductSheet({ info, onClose, onPickMultiple }: {
               <X className="h-4 w-4 text-zinc-600 dark:text-zinc-300" />
             </button>
           </div>
+
+          {/* Price change badge */}
+          {r.priceChange && (
+            <div className="mb-4">
+              <PriceChangeBadge change={r.priceChange} />
+            </div>
+          )}
 
           {/* Price row */}
           <div className="flex gap-3 mb-5">
@@ -153,7 +196,10 @@ function ProductSheet({ info, onClose, onPickMultiple }: {
                     onClick={() => onPickMultiple?.(m)}
                     className="w-full text-left px-3 py-2.5 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 hover:bg-zinc-50 active:bg-zinc-100"
                   >
-                    <div className="text-sm font-medium">{m.brandName}</div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-medium">{m.brandName}</span>
+                      {m.priceChange && <PriceChangeBadge change={m.priceChange} />}
+                    </div>
                     <div className="text-xs text-zinc-500">{m.bottleSize} · {fmt(m.shelfPrice)}</div>
                   </button>
                 ))}

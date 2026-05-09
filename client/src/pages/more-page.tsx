@@ -1,8 +1,8 @@
 import { useState } from "react";
 import { useLocation } from "wouter";
 import {
-  TrendingUp, RefreshCw, Upload, FileText, ChevronRight,
-  Database, Tag, Info, CheckCircle, AlertCircle
+  TrendingUp, RefreshCw, Upload, ChevronRight,
+  Database, Tag, Info, ArrowUpDown
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
@@ -13,6 +13,12 @@ interface DbStatus {
   uniqueBrands: number;
   uniqueVendors: number;
   avgPrice: number;
+}
+
+interface PriceChangeStatus {
+  totalChanges: number;
+  newProducts: number;
+  priceChanges: number;
 }
 
 function MenuRow({ icon: Icon, label, sublabel, onPress, iconColor = "text-blue-500", iconBg = "bg-blue-50 dark:bg-blue-900/30" }: {
@@ -51,11 +57,13 @@ function Divider() {
 export default function MorePage() {
   const [, setLocation] = useLocation();
   const { toast } = useToast();
-  const [refreshing, setRefreshing]   = useState(false);
-  const [dbStatus, setDbStatus]       = useState<DbStatus | null>(null);
-  const [showUpload, setShowUpload]   = useState(false);
-  const [uploading, setUploading]     = useState(false);
-  const [dragOver, setDragOver]       = useState(false);
+  const [refreshing, setRefreshing]           = useState(false);
+  const [refreshingChanges, setRefreshingChanges] = useState(false);
+  const [dbStatus, setDbStatus]               = useState<DbStatus | null>(null);
+  const [priceChangeStatus, setPriceChangeStatus] = useState<PriceChangeStatus | null>(null);
+  const [showUpload, setShowUpload]           = useState(false);
+  const [uploading, setUploading]             = useState(false);
+  const [dragOver, setDragOver]               = useState(false);
 
   const refreshData = async () => {
     setRefreshing(true);
@@ -71,6 +79,25 @@ export default function MorePage() {
     } catch {
       toast({ variant: "destructive", title: "Refresh failed", description: "Could not reach Michigan state website" });
     } finally { setRefreshing(false); }
+  };
+
+  const refreshPriceChanges = async () => {
+    setRefreshingChanges(true);
+    try {
+      const r = await fetch("/api/fetch-price-changes", { method: "POST" });
+      const d = await r.json();
+      if (d.success) {
+        setPriceChangeStatus({ totalChanges: d.totalChanges, newProducts: d.newProducts, priceChanges: d.priceChanges });
+        toast({
+          title: "Price changes loaded",
+          description: `${d.newProducts} new products, ${d.priceChanges} price changes`,
+        });
+      } else {
+        toast({ variant: "destructive", title: "Failed to load price changes", description: d.error || d.details || "Unknown error" });
+      }
+    } catch {
+      toast({ variant: "destructive", title: "Failed to load price changes", description: "Could not reach Michigan state website" });
+    } finally { setRefreshingChanges(false); }
   };
 
   const handleMappingFile = async (file: File) => {
@@ -139,6 +166,45 @@ export default function MorePage() {
         >
           <RefreshCw className={`h-4 w-4 mr-2 ${refreshing ? "animate-spin" : ""}`} />
           {refreshing ? "Refreshing…" : "Refresh from Michigan State"}
+        </Button>
+      </div>
+
+      {/* Price changes card */}
+      <div className="mx-4 mt-3 bg-white dark:bg-zinc-900 rounded-2xl p-4 shadow-sm">
+        <div className="flex items-center gap-2 mb-3">
+          <ArrowUpDown className="h-4 w-4 text-zinc-400" />
+          <span className="text-xs font-semibold text-zinc-400 uppercase tracking-wide">Price Change Tracking</span>
+        </div>
+        {priceChangeStatus ? (
+          <div className="grid grid-cols-3 gap-2 mb-3">
+            <div className="bg-zinc-50 dark:bg-zinc-800 rounded-xl p-3 text-center">
+              <div className="text-lg font-bold text-zinc-900 dark:text-zinc-100">{priceChangeStatus.totalChanges.toLocaleString()}</div>
+              <div className="text-xs text-zinc-500">Total</div>
+            </div>
+            <div className="bg-teal-50 dark:bg-teal-900/20 rounded-xl p-3 text-center">
+              <div className="text-lg font-bold text-teal-700 dark:text-teal-300">{priceChangeStatus.newProducts}</div>
+              <div className="text-xs text-teal-600 dark:text-teal-400">New</div>
+            </div>
+            <div className="bg-orange-50 dark:bg-orange-900/20 rounded-xl p-3 text-center">
+              <div className="text-lg font-bold text-orange-700 dark:text-orange-300">{priceChangeStatus.priceChanges}</div>
+              <div className="text-xs text-orange-600 dark:text-orange-400">Changed</div>
+            </div>
+          </div>
+        ) : (
+          <p className="text-xs text-zinc-500 mb-3">
+            Load price change data from the Michigan Excel price book. Scan or search results will show if a product is new or has a price change.
+          </p>
+        )}
+        <Button
+          onClick={refreshPriceChanges}
+          disabled={refreshingChanges}
+          variant="outline"
+          size="sm"
+          className="w-full"
+          data-testid="button-refresh-price-changes"
+        >
+          <RefreshCw className={`h-4 w-4 mr-2 ${refreshingChanges ? "animate-spin" : ""}`} />
+          {refreshingChanges ? "Loading…" : "Load Price Changes"}
         </Button>
       </div>
 
