@@ -139,11 +139,79 @@ function getUserId(req: any): string {
 
 // ── Route registration ─────────────────────────────────────────────────────────
 
+// ── Internal: fetch price changes from Michigan Excel ─────────────────────────
+
+async function fetchPriceChangesInternal(): Promise<{ success: boolean; totalChanges: number; newProducts: number; priceChanges: number; error?: string }> {
+  const excelUrl = 'https://www.michigan.gov/lara/-/media/Project/Websites/lara/lcc/Price-Book/5-3-26-PRICE-BOOK-Excel.xlsx?rev=6a054889b3c3465a88a3ae2656a6733b&hash=95B952FA318836F5B90F5E2F90EB3E65';
+  try {
+    const response = await fetch(excelUrl, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
+      signal: AbortSignal.timeout(120000),
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const buffer = await response.arrayBuffer();
+    const workbook = XLSX.read(Buffer.from(buffer), { type: 'buffer' });
+    const sheet = workbook.Sheets[workbook.SheetNames[0]];
+    const rows: any[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null });
+    if (!rows.length) throw new Error('Empty Excel file');
+    const headerRow = rows[0].map((h: any) => String(h ?? '').toLowerCase().trim());
+    let liquorCodeIdx = headerRow.findIndex((h: string) => h === 'liqour code');
+    if (liquorCodeIdx === -1) liquorCodeIdx = headerRow.findIndex((h: string) => h === 'liquor code');
+    if (liquorCodeIdx === -1) liquorCodeIdx = headerRow.findIndex((h: string) => h.includes('liq') && h.includes('code'));
+    let newChngIdx = headerRow.findIndex((h: string) => h === 'new/chng');
+    if (newChngIdx === -1) newChngIdx = headerRow.findIndex((h: string) => h.includes('new') && h.includes('chng'));
+    if (newChngIdx === -1) newChngIdx = headerRow.findIndex((h: string) => h.includes('chng'));
+    if (liquorCodeIdx === -1 || newChngIdx === -1) throw new Error('Could not find required columns');
+    const changes: Array<{ liquorCode: string; newChng: string | null }> = [];
+    for (let i = 1; i < rows.length; i++) {
+      const row = rows[i];
+      if (!row) continue;
+      const rawCode = row[liquorCodeIdx];
+      if (rawCode === null || rawCode === undefined || rawCode === '') continue;
+      const liquorCode = String(rawCode).trim();
+      if (!liquorCode) continue;
+      const rawChng = row[newChngIdx];
+      let newChng: string | null = null;
+      if (rawChng !== null && rawChng !== undefined && rawChng !== '') {
+        if (typeof rawChng === 'number') { if (rawChng !== 0) newChng = rawChng.toString(); }
+        else {
+          const str = String(rawChng).trim();
+          if (str.toLowerCase() === 'new') { newChng = 'new'; }
+          else { const num = parseFloat(str); if (!isNaN(num) && num !== 0) newChng = num.toString(); }
+        }
+      }
+      if (newChng !== null) changes.push({ liquorCode, newChng });
+    }
+    await storage.clearPriceBookChanges();
+    await storage.bulkUpsertPriceChanges(changes);
+    return {
+      success: true,
+      totalChanges: changes.length,
+      newProducts: changes.filter(c => c.newChng === 'new').length,
+      priceChanges: changes.filter(c => c.newChng !== null && c.newChng !== 'new').length,
+    };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'Unknown error';
+    console.error('[fetchPriceChanges]', msg);
+    return { success: false, totalChanges: 0, newProducts: 0, priceChanges: 0, error: msg };
+  }
+}
+
 export async function registerRoutes(app: Express): Promise<Server> {
 
   // ── Config — tells the frontend to use Clerk ──────────────────────────────────
   app.get("/api/config", (_req, res) => {
     res.json({ clerkPublishableKey: process.env.CLERK_PUBLISHABLE_KEY || null });
+  });
+
+  // ── DB status — lightweight record count check ────────────────────────────────
+  app.get("/api/db-status", async (_req, res) => {
+    try {
+      const count = await storage.getLiquorRecordCount();
+      res.json({ count });
+    } catch {
+      res.json({ count: 0 });
+    }
   });
 
   // ── Auth user — fetches profile from Clerk API ────────────────────────────────
@@ -216,8 +284,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
       console.log('Cleared existing liquor records');
       await storage.bulkCreateLiquorRecords(records);
       console.log(`Saved ${records.length} liquor records to storage`);
+
+      // Auto-fetch price changes from Excel after loading TXT data
+      console.log('Auto-fetching price changes from Michigan Excel...');
+      const priceChangeResult = await fetchPriceChangesInternal();
+      console.log('Price changes result:', priceChangeResult);
+
       console.log('Data fetch and processing complete:', records.length, 'records processed');
-      res.json({ success: true, totalRecords: records.length, uniqueBrands: brands.size, uniqueVendors: vendors.size, avgPrice: Number(avgPrice.toFixed(2)) });
+      res.json({
+        success: true,
+        totalRecords: records.length,
+        uniqueBrands: brands.size,
+        uniqueVendors: vendors.size,
+        avgPrice: Number(avgPrice.toFixed(2)),
+        priceChanges: priceChangeResult,
+      });
     } catch (error) {
       console.error("Data fetch error:", error);
       if (!res.headersSent) res.status(500).json({ success: false, error: "Failed to fetch liquor data", details: error instanceof Error ? error.message : "Unknown error" });

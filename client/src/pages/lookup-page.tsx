@@ -224,19 +224,22 @@ export default function LookupPage() {
   const lastCodeRef   = useRef("");
   const lastTimeRef   = useRef(0);
 
-  const [isScanning, setIsScanning] = useState(false);
-  const [camError,   setCamError]   = useState("");
-  const [product,    setProduct]    = useState<ProductInfo | null>(null);
-  const [isLooking,  setIsLooking]  = useState(false);
-  const [showManual, setShowManual] = useState(false);
-  const [manualVal,  setManualVal]  = useState("");
-  const [dbLoaded,   setDbLoaded]   = useState<number | null>(null);
+  const [isScanning,     setIsScanning]     = useState(false);
+  const [camError,       setCamError]       = useState("");
+  const [product,        setProduct]        = useState<ProductInfo | null>(null);
+  const [isLooking,      setIsLooking]      = useState(false);
+  const [showManual,     setShowManual]     = useState(false);
+  const [manualVal,      setManualVal]      = useState("");
+  const [dbLoaded,       setDbLoaded]       = useState<number | null>(null);
+  const [searchResults,  setSearchResults]  = useState<Array<LiquorRecord & { priceChange?: string | null }>>([]);
+  const [searchLoading,  setSearchLoading]  = useState(false);
+  const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Load data count once
+  // Load data count once (lightweight — just a count check, never re-imports)
   useEffect(() => {
-    fetch("/api/fetch-liquor-data", { method: "POST" })
+    fetch("/api/db-status")
       .then(r => r.json())
-      .then(d => d.totalRecords && setDbLoaded(d.totalRecords))
+      .then(d => d.count && setDbLoaded(d.count))
       .catch(() => {});
   }, []);
 
@@ -378,12 +381,41 @@ export default function LookupPage() {
     cooldownRef.current = 0;
   }, []);
 
+  // Debounced name/brand search
+  const handleManualChange = (val: string) => {
+    setManualVal(val);
+    setSearchResults([]);
+    if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
+    const trimmed = val.trim();
+    if (!trimmed || trimmed.length < 2) return;
+    // If it looks like a pure number, don't search by name — let them hit Look Up
+    if (/^\d+$/.test(trimmed)) return;
+    searchTimerRef.current = setTimeout(async () => {
+      setSearchLoading(true);
+      try {
+        const res = await fetch(`/api/search-liquor?query=${encodeURIComponent(trimmed)}`);
+        const data = await res.json();
+        if (data.success) setSearchResults(data.results || []);
+      } catch { /* ignore */ } finally {
+        setSearchLoading(false);
+      }
+    }, 300);
+  };
+
+  const handleSelectSearchResult = (rec: LiquorRecord & { priceChange?: string | null }) => {
+    setProduct({ record: rec, barcode: rec.upcCode1 || rec.liquorCode || "" });
+    setShowManual(false);
+    setManualVal("");
+    setSearchResults([]);
+  };
+
   const handleManualSubmit = () => {
     const v = manualVal.trim();
     if (!v) return;
     lookupBarcode(v);
     setManualVal("");
     setShowManual(false);
+    setSearchResults([]);
   };
 
   return (
@@ -481,29 +513,65 @@ export default function LookupPage() {
         </div>
       </div>
 
-      {/* Manual barcode input overlay */}
+      {/* Manual barcode / name search overlay */}
       {showManual && (
-        <div className="absolute top-0 left-0 right-0 bottom-0 z-40 flex items-center justify-center bg-black/70 backdrop-blur-sm px-6"
-             onClick={() => setShowManual(false)}>
-          <div className="w-full bg-white dark:bg-zinc-900 rounded-2xl p-5 shadow-2xl" onClick={e => e.stopPropagation()}>
-            <h3 className="text-base font-semibold mb-3 text-zinc-900 dark:text-white">Enter Barcode or Code</h3>
-            <Input
-              autoFocus
-              value={manualVal}
-              onChange={e => setManualVal(e.target.value)}
-              onKeyDown={e => e.key === "Enter" && handleManualSubmit()}
-              placeholder="UPC, liquor code, or barcode…"
-              className="mb-3"
-              data-testid="input-manual-barcode"
-            />
-            <div className="flex gap-2">
-              <Button onClick={handleManualSubmit} className="flex-1" disabled={!manualVal.trim()} data-testid="button-manual-submit">
-                Look Up
-              </Button>
-              <Button onClick={() => setShowManual(false)} variant="outline" className="flex-1">
-                Cancel
-              </Button>
+        <div className="absolute top-0 left-0 right-0 bottom-0 z-40 flex items-start justify-center bg-black/70 backdrop-blur-sm px-4 pt-16"
+             onClick={() => { setShowManual(false); setSearchResults([]); setManualVal(""); }}>
+          <div className="w-full bg-white dark:bg-zinc-900 rounded-2xl shadow-2xl overflow-hidden" onClick={e => e.stopPropagation()}>
+            <div className="p-4 pb-3">
+              <h3 className="text-base font-semibold mb-3 text-zinc-900 dark:text-white">Search Products</h3>
+              <Input
+                autoFocus
+                value={manualVal}
+                onChange={e => handleManualChange(e.target.value)}
+                onKeyDown={e => e.key === "Enter" && handleManualSubmit()}
+                placeholder="Brand name, UPC, or liquor code…"
+                className="mb-3"
+                data-testid="input-manual-barcode"
+              />
+              <div className="flex gap-2">
+                <Button onClick={handleManualSubmit} className="flex-1" disabled={!manualVal.trim()} data-testid="button-manual-submit">
+                  Look Up
+                </Button>
+                <Button onClick={() => { setShowManual(false); setSearchResults([]); setManualVal(""); }} variant="outline" className="flex-1">
+                  Cancel
+                </Button>
+              </div>
             </div>
+
+            {/* Search results */}
+            {searchLoading && (
+              <div className="px-4 py-3 border-t border-zinc-100 dark:border-zinc-800 text-xs text-zinc-500 text-center">
+                Searching…
+              </div>
+            )}
+            {!searchLoading && searchResults.length > 0 && (
+              <div className="border-t border-zinc-100 dark:border-zinc-800 max-h-64 overflow-y-auto">
+                {searchResults.map(r => (
+                  <button
+                    key={r.id}
+                    onClick={() => handleSelectSearchResult(r)}
+                    className="w-full text-left px-4 py-3 border-b border-zinc-50 dark:border-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-800 active:bg-zinc-100 transition-colors"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="min-w-0 flex-1">
+                        <p className="text-sm font-medium text-zinc-900 dark:text-zinc-100 truncate">{r.brandName}</p>
+                        <p className="text-xs text-zinc-500 truncate">{r.bottleSize} · {r.vendorName}</p>
+                      </div>
+                      <div className="flex-shrink-0 text-right">
+                        <p className="text-sm font-bold text-blue-600 dark:text-blue-400">{fmt(r.shelfPrice)}</p>
+                        {r.priceChange && <PriceChangeBadge change={r.priceChange} />}
+                      </div>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
+            {!searchLoading && manualVal.trim().length >= 2 && !/^\d+$/.test(manualVal.trim()) && searchResults.length === 0 && (
+              <div className="px-4 py-3 border-t border-zinc-100 dark:border-zinc-800 text-xs text-zinc-500 text-center">
+                No products found
+              </div>
+            )}
           </div>
         </div>
       )}

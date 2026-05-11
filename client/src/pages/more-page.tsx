@@ -72,7 +72,15 @@ export default function MorePage() {
       const d = await r.json();
       if (d.success) {
         setDbStatus({ totalRecords: d.totalRecords, uniqueBrands: d.uniqueBrands, uniqueVendors: d.uniqueVendors, avgPrice: d.avgPrice });
-        toast({ title: "Database refreshed", description: `${d.totalRecords.toLocaleString()} records loaded` });
+        if (d.priceChanges?.success) {
+          setPriceChangeStatus({ totalChanges: d.priceChanges.totalChanges, newProducts: d.priceChanges.newProducts, priceChanges: d.priceChanges.priceChanges });
+          toast({
+            title: "Database refreshed",
+            description: `${d.totalRecords.toLocaleString()} records · ${d.priceChanges.newProducts} new · ${d.priceChanges.priceChanges} price changes`,
+          });
+        } else {
+          toast({ title: "Database refreshed", description: `${d.totalRecords.toLocaleString()} records loaded` });
+        }
       } else {
         toast({ variant: "destructive", title: "Refresh failed", description: d.error || "Unknown error" });
       }
@@ -153,7 +161,7 @@ export default function MorePage() {
         ) : (
           <div className="flex items-center gap-2 text-sm text-zinc-500">
             <Info className="h-4 w-4" />
-            <span>Data auto-loads on app start from michigan.gov LARA</span>
+            <span>Tap "Refresh" to load data from michigan.gov LARA</span>
           </div>
         )}
         <Button
@@ -165,7 +173,7 @@ export default function MorePage() {
           data-testid="button-refresh-data"
         >
           <RefreshCw className={`h-4 w-4 mr-2 ${refreshing ? "animate-spin" : ""}`} />
-          {refreshing ? "Refreshing…" : "Refresh from Michigan State"}
+          {refreshing ? "Refreshing… (this takes ~30s)" : "Refresh from Michigan State"}
         </Button>
       </div>
 

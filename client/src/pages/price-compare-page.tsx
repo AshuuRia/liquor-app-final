@@ -166,14 +166,19 @@ async function saveCloudSession(
   fileName: string,
   rows: ComparisonRow[]
 ): Promise<string | null> {
+  // Strip allMatches before saving — those can be large and are re-fetched from the DB
+  const slimRows = rows.map(({ allMatches: _dropped, ...r }) => r);
   const authHeaders = await getAuthHeaders();
   const res = await fetch("/api/price-compare/session", {
     method: "POST",
     headers: { "Content-Type": "application/json", ...authHeaders },
     credentials: "include",
-    body: JSON.stringify({ sessionId, sessionName, fileName, rowsJson: JSON.stringify(rows) }),
+    body: JSON.stringify({ sessionId, sessionName, fileName, rowsJson: JSON.stringify(slimRows) }),
   });
-  if (!res.ok) throw new Error(`${res.status}`);
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`${res.status}${text ? `: ${text}` : ""}`);
+  }
   const data = await res.json();
   return data.session?.id || null;
 }
