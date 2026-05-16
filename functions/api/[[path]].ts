@@ -208,12 +208,75 @@ app.get('/search-liquor', async (c) => {
   try {
     const query = c.req.query('query') || '';
     if (query.length < 2) return c.json({ success: true, results: [], message: 'Query too short' });
-    const { results, totalFound } = await db(c).searchLiquorRecords(query, 50);
-    return c.json({ success: true, results, totalFound });
+    const storage = db(c);
+    const { results, totalFound } = await storage.searchLiquorRecords(query, 50);
+    const codes = results.map((r: any) => r.liquorCode).filter(Boolean) as string[];
+    const priceChanges = await storage.getPriceChangeBatch(codes);
+    const resultsWithChanges = results.map((r: any) => ({ ...r, priceChange: priceChanges.get(r.liquorCode) ?? null }));
+    return c.json({ success: true, results: resultsWithChanges, totalFound });
   } catch (err) {
     return c.json({ success: false, error: 'Failed to search' }, 500);
   }
 });
+
+app.post('/fetch-price-changes', async (c) => {
+  try {
+    const excelUrl = 'https://www.michigan.gov/lara/-/media/Project/Websites/lara/lcc/Price-Book/5-3-26-PRICE-BOOK-Excel.xlsx?rev=6a054889b3c3465a88a3ae2656a6733b&hash=95B952FA318836F5B90F5E2F90EB3E65';
+    const response = await fetch(excelUrl, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
+      signal: AbortSignal.timeout(120000),
+    });
+    if (!response.ok) throw new Error(`Failed to download Excel: ${response.status} ${response.statusText}`);
+    const buffer = await response.arrayBuffer();
+    const workbook = XLSX.read(new Uint8Array(buffer), { type: 'array' });
+    const sheet = workbook.Sheets[workbook.SheetNames[0]];
+    const rows: any[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null });
+    if (!rows.length) throw new Error('Empty Excel file');
+
+    const headerRow = rows[0].map((h: any) => String(h ?? '').toLowerCase().trim());
+    let liquorCodeIdx = headerRow.findIndex((h: string) => h === 'liqour code');
+    if (liquorCodeIdx === -1) liquorCodeIdx = headerRow.findIndex((h: string) => h === 'liquor code');
+    if (liquorCodeIdx === -1) liquorCodeIdx = headerRow.findIndex((h: string) => h.includes('liq') && h.includes('code'));
+    let newChngIdx = headerRow.findIndex((h: string) => h === 'new/chng');
+    if (newChngIdx === -1) newChngIdx = headerRow.findIndex((h: string) => h.includes('new') && h.includes('chng'));
+    if (newChngIdx === -1) newChngIdx = headerRow.findIndex((h: string) => h.includes('chng'));
+    if (liquorCodeIdx === -1) throw new Error(`Could not find liquor code column. Headers: ${headerRow.join(', ')}`);
+    if (newChngIdx === -1) throw new Error(`Could not find NEW/CHNG column. Headers: ${headerRow.join(', ')}`);
+
+    const changes: Array<{ liquorCode: string; newChng: string | null }> = [];
+    for (let i = 1; i < rows.length; i++) {
+      const row = rows[i];
+      if (!row) continue;
+      const rawCode = row[liquorCodeIdx];
+      if (rawCode === null || rawCode === undefined || rawCode === '') continue;
+      const liquorCode = String(rawCode).trim();
+      if (!liquorCode) continue;
+      const rawChng = row[newChngIdx];
+      let newChng: string | null = null;
+      if (rawChng !== null && rawChng !== undefined && rawChng !== '') {
+        if (typeof rawChng === 'number') {
+          if (rawChng !== 0) newChng = rawChng.toString();
+        } else {
+          const str = String(rawChng).trim();
+          if (str.toLowerCase() === 'new') newChng = 'new';
+          else { const num = parseFloat(str); if (!isNaN(num) && num !== 0) newChng = num.toString(); }
+        }
+      }
+      if (newChng !== null) changes.push({ liquorCode, newChng });
+    }
+
+    const storage = db(c);
+    await storage.clearPriceBookChanges();
+    await storage.bulkUpsertPriceChanges(changes);
+
+    const newCount = changes.filter(c => c.newChng === 'new').length;
+    const changedCount = changes.filter(c => c.newChng !== null && c.newChng !== 'new').length;
+    return c.json({ success: true, totalChanges: changes.length, newProducts: newCount, priceChanges: changedCount });
+  } catch (err) {
+    return c.json({ success: false, error: 'Failed to fetch price changes', details: String(err) }, 500);
+  }
+});
+
 
 app.post('/generate-excel', async (c) => {
   try {
@@ -264,7 +327,12 @@ app.post('/scan-barcode', requireAuth, async (c) => {
 
     const matchedProducts = await storage.findAllLiquorByBarcode(barcode);
     if (!matchedProducts.length) return c.json({ success: false, barcode, error: 'Product not found in database' });
-    if (matchedProducts.length > 1) return c.json({ success: true, requiresSelection: true, barcode, matchedProducts });
+    if (matchedProducts.length > 1) {
+      const codes = matchedProducts.map((p: any) => p.liquorCode).filter(Boolean) as string[];
+      const priceChanges = await storage.getPriceChangeBatch(codes);
+      const matchedWithChanges = matchedProducts.map((p: any) => ({ ...p, priceChange: priceChanges.get(p.liquorCode) ?? null }));
+      return c.json({ success: true, requiresSelection: true, barcode, matchedProducts: matchedWithChanges });
+    }
 
     const matchedProduct = matchedProducts[0];
     if (sessionId) {
@@ -276,7 +344,8 @@ app.post('/scan-barcode', requireAuth, async (c) => {
         quantity: 1,
       });
     }
-    return c.json({ success: true, requiresSelection: false, barcode, matchedProduct });
+    const priceChange = matchedProduct.liquorCode ? await storage.getPriceChange(matchedProduct.liquorCode) : null;
+    return c.json({ success: true, requiresSelection: false, barcode, matchedProduct: { ...matchedProduct, priceChange } });
   } catch (err) {
     return c.json({ success: false, error: 'Failed to scan barcode', details: String(err) }, 500);
   }
