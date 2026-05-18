@@ -336,6 +336,18 @@ export default function PriceComparePage() {
       }
     };
   }, []);
+  
+// Auto-load Michigan price changes once per session
+useEffect(() => {
+  const KEY = "priceChangesLoadedAt";
+  const last = Number(sessionStorage.getItem(KEY) || 0);
+  if (Date.now() - last < 6 * 60 * 60 * 1000) return; // throttle: 6h
+  sessionStorage.setItem(KEY, String(Date.now()));
+  fetch("/api/fetch-price-changes", { method: "POST" })
+    .then(r => r.json())
+    .then(d => { if (!d?.success) console.warn("Auto price-change load failed:", d?.details || d?.error); })
+    .catch(err => console.warn("Auto price-change load error:", err));
+}, []);
 
   // ── Sessions dialog helpers ───────────────────────────────────────────────
   const openSessions = async () => {
