@@ -220,14 +220,34 @@ app.get('/search-liquor', async (c) => {
 });
 
 app.post('/fetch-price-changes', async (c) => {
+  const PRICE_BOOK_URL = 'https://www.michigan.gov/lara/-/media/Project/Websites/lara/lcc/Price-Book/5-3-26-PRICE-BOOK-Excel.xlsx?rev=6a054889b3c3465a88a3ae2656a6733b&hash=95B952FA318836F5B90F5E2F90EB3E65';
+
+  const browserHeaders: Record<string, string> = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+    'Accept': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/octet-stream,*/*;q=0.8',
+    'Accept-Language': 'en-US,en;q=0.9',
+    'Referer': 'https://www.michigan.gov/lara/bureau-list/lcc/spirits-price-book-info',
+    'Sec-Fetch-Dest': 'document',
+    'Sec-Fetch-Mode': 'navigate',
+    'Sec-Fetch-Site': 'same-origin',
+  };
+
+  async function tryFetch(url: string, useProxy = false): Promise<ArrayBuffer> {
+    const target = useProxy ? `https://corsproxy.io/?${encodeURIComponent(url)}` : url;
+    const res = await fetch(target, { headers: browserHeaders, signal: AbortSignal.timeout(120000) });
+    if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
+    return await res.arrayBuffer();
+  }
+
   try {
-    const excelUrl = 'https://www.michigan.gov/lara/-/media/Project/Websites/lara/lcc/Price-Book/5-3-26-PRICE-BOOK-Excel.xlsx?rev=6a054889b3c3465a88a3ae2656a6733b&hash=95B952FA318836F5B90F5E2F90EB3E65';
-    const response = await fetch(excelUrl, {
-      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
-      signal: AbortSignal.timeout(120000),
-    });
-    if (!response.ok) throw new Error(`Failed to download Excel: ${response.status} ${response.statusText}`);
-    const buffer = await response.arrayBuffer();
+    let buffer: ArrayBuffer;
+    try {
+      buffer = await tryFetch(PRICE_BOOK_URL, false);
+    } catch (directErr) {
+      console.warn('Direct Michigan fetch failed, trying proxy fallback:', String(directErr));
+      buffer = await tryFetch(PRICE_BOOK_URL, true);
+    }
+
     const workbook = XLSX.read(new Uint8Array(buffer), { type: 'array' });
     const sheet = workbook.Sheets[workbook.SheetNames[0]];
     const rows: any[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null });
@@ -276,6 +296,7 @@ app.post('/fetch-price-changes', async (c) => {
     return c.json({ success: false, error: 'Failed to fetch price changes', details: String(err) }, 500);
   }
 });
+
 
 
 app.post('/generate-excel', async (c) => {
