@@ -220,34 +220,43 @@ app.get('/search-liquor', async (c) => {
 });
 
 app.post('/fetch-price-changes', async (c) => {
-  const PRICE_BOOK_URL = 'https://www.michigan.gov/lara/-/media/Project/Websites/lara/lcc/Price-Book/5-3-26-PRICE-BOOK-Excel.xlsx?rev=6a054889b3c3465a88a3ae2656a6733b&hash=95B952FA318836F5B90F5E2F90EB3E65';
+  // Primary source: bundled static asset on the same origin (no Akamai, no proxy).
+  // Fallback: live Michigan URL (often 403s from Workers, kept as last resort).
+  const LOCAL_URL = new URL('/data/price-book.xlsx', c.req.url).toString();
+  const LIVE_URL = 'https://www.michigan.gov/lara/-/media/Project/Websites/lara/lcc/Price-Book/5-3-26-PRICE-BOOK-Excel.xlsx?rev=6a054889b3c3465a88a3ae2656a6733b&hash=95B952FA318836F5B90F5E2F90EB3E65';
 
-  const browserHeaders: Record<string, string> = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-    'Accept': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/octet-stream,*/*;q=0.8',
-    'Accept-Language': 'en-US,en;q=0.9',
-    'Referer': 'https://www.michigan.gov/lara/bureau-list/lcc/spirits-price-book-info',
-    'Sec-Fetch-Dest': 'document',
-    'Sec-Fetch-Mode': 'navigate',
-    'Sec-Fetch-Site': 'same-origin',
-  };
-
-  async function tryFetch(url: string, useProxy = false): Promise<ArrayBuffer> {
-    const target = useProxy ? `https://corsproxy.io/?${encodeURIComponent(url)}` : url;
-    const res = await fetch(target, { headers: browserHeaders, signal: AbortSignal.timeout(120000) });
+  async function fetchBuffer(url: string): Promise<ArrayBuffer> {
+    const res = await fetch(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'Accept': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/octet-stream,*/*;q=0.8',
+        'Referer': 'https://www.michigan.gov/lara/bureau-list/lcc/spirits-price-book-info',
+      },
+      signal: AbortSignal.timeout(60000),
+    });
     if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
     return await res.arrayBuffer();
   }
 
+  let buffer: ArrayBuffer;
+  let source = 'local';
   try {
-    let buffer: ArrayBuffer;
+    buffer = await fetchBuffer(LOCAL_URL);
+  } catch (localErr) {
+    console.warn('Local price book missing, falling back to live URL:', String(localErr));
     try {
-      buffer = await tryFetch(PRICE_BOOK_URL, false);
-    } catch (directErr) {
-      console.warn('Direct Michigan fetch failed, trying proxy fallback:', String(directErr));
-      buffer = await tryFetch(PRICE_BOOK_URL, true);
+      buffer = await fetchBuffer(LIVE_URL);
+      source = 'live';
+    } catch (liveErr) {
+      return c.json({
+        success: false,
+        error: 'Price book unavailable. Upload client/public/data/price-book.xlsx to your repo.',
+        details: `local: ${String(localErr)} | live: ${String(liveErr)}`,
+      }, 200);
     }
+  }
 
+  try {
     const workbook = XLSX.read(new Uint8Array(buffer), { type: 'array' });
     const sheet = workbook.Sheets[workbook.SheetNames[0]];
     const rows: any[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null });
@@ -291,11 +300,12 @@ app.post('/fetch-price-changes', async (c) => {
 
     const newCount = changes.filter(c => c.newChng === 'new').length;
     const changedCount = changes.filter(c => c.newChng !== null && c.newChng !== 'new').length;
-    return c.json({ success: true, totalChanges: changes.length, newProducts: newCount, priceChanges: changedCount });
+    return c.json({ success: true, source, totalChanges: changes.length, newProducts: newCount, priceChanges: changedCount });
   } catch (err) {
-    return c.json({ success: false, error: 'Failed to fetch price changes', details: String(err) }, 500);
+    return c.json({ success: false, error: 'Failed to parse price changes', details: String(err) }, 200);
   }
 });
+
 
 
 
