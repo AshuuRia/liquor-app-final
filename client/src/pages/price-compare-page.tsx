@@ -15,6 +15,8 @@ import {
 } from "lucide-react";
 import type { LiquorRecord } from "@shared/schema";
 import { getAuthHeaders } from "@/lib/queryClient";
+import { useAuthReady } from "@/hooks/use-auth-ready";
+const { user, isReady } = useAuthReady();
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -274,13 +276,12 @@ export default function PriceComparePage() {
 
   // ── Load on mount ─────────────────────────────────────────────────────────
   useEffect(() => {
-    let cancelled = false;
-
-    const local = loadLocalSession();
-    if (local?.rows.length) {
-      setRows(local.rows);
-      setFileName(local.fileName);
-    }
+  if (!isReady || !user) return;        // <-- add as first line
+  let cancelled = false;
+  // ...everything else unchanged...
+  tryCloud();
+  return () => { cancelled = true; };
+}, [isReady, user]);                    // <-- change from [] to [isReady, user]
 
     const storedId   = loadStoredSessionId();
     const storedName = loadStoredSessionName();
@@ -339,15 +340,19 @@ export default function PriceComparePage() {
   
 // Auto-load Michigan price changes once per session
 useEffect(() => {
+  if (!isReady || !user) return;
   const KEY = "priceChangesLoadedAt";
   const last = Number(sessionStorage.getItem(KEY) || 0);
-  if (Date.now() - last < 6 * 60 * 60 * 1000) return; // throttle: 6h
+  if (Date.now() - last < 6 * 60 * 60 * 1000) return;
   sessionStorage.setItem(KEY, String(Date.now()));
-  fetch("/api/fetch-price-changes", { method: "POST" })
-    .then(r => r.json())
-    .then(d => { if (!d?.success) console.warn("Auto price-change load failed:", d?.details || d?.error); })
-    .catch(err => console.warn("Auto price-change load error:", err));
-}, []);
+  (async () => {
+    const authHeaders = await getAuthHeaders();
+    fetch("/api/fetch-price-changes", { method: "POST", headers: authHeaders })
+      .then(r => r.json())
+      .then(d => { if (!d?.success) console.warn("Auto price-change load failed:", d?.details || d?.error); })
+      .catch(err => console.warn("Auto price-change load error:", err));
+  })();
+}, [isReady, user]);
 
   // ── Sessions dialog helpers ───────────────────────────────────────────────
   const openSessions = async () => {
