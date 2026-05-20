@@ -13,6 +13,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { FileText, Scan, AlertCircle, AlertTriangle, TrendingUp } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import type { LiquorRecord, Session } from "@shared/schema";
+import { useAuthReady } from "@/hooks/use-auth-ready";
 
 export default function BarcodeScannerPage() {
   const [sessionId, setSessionId] = useState<string | null>(null);
@@ -32,26 +33,25 @@ export default function BarcodeScannerPage() {
 
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const { user, isReady } = useAuthReady();
 
   // Get active session on load
   const { data: activeSessionData } = useQuery({
-    queryKey: ['/api/sessions/active'],
-  });
+    queryKey: ['/api/sessions/active', user?.id],
+    enabled: isReady && !!user,
+});
 
   const activeSession = (activeSessionData as any)?.session;
 
-  useEffect(() => {
-    // Check if liquor data has been loaded
-    checkLiquorData();
-    
-    // If there's an active session, use it
-    if (activeSession) {
-      setSessionId(activeSession.id);
-    } else {
-      // Create a default session if none exists
-      createDefaultSession();
-    }
-  }, [activeSession]);
+useEffect(() => {
+  if (!isReady || !user) return;        // <-- add
+  checkLiquorData();
+  if (activeSession) {
+    setSessionId(activeSession.id);
+  } else {
+    createDefaultSession();
+  }
+}, [isReady, user, activeSession]);     // <-- add isReady, user
 
   const createDefaultSession = async () => {
     try {
