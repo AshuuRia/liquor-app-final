@@ -16,7 +16,6 @@ import {
 import type { LiquorRecord } from "@shared/schema";
 import { getAuthHeaders } from "@/lib/queryClient";
 import { useAuthReady } from "@/hooks/use-auth-ready";
-const { user, isReady } = useAuthReady();
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -198,6 +197,7 @@ async function deleteCloudSession(id: string): Promise<void> {
 
 export default function PriceComparePage() {
   const { toast } = useToast();
+  const { user, isReady } = useAuthReady();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [pageMode, setPageMode] = useState<PageMode>("csv");
