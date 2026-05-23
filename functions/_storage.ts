@@ -315,13 +315,25 @@ export class D1Storage {
 
   // ── Price book changes ────────────────────────────────────────────────────
 
+  private async ensurePriceBookChangesTable(): Promise<void> {
+    await this.db.run(sql`
+      CREATE TABLE IF NOT EXISTS price_book_changes (
+        liquor_code TEXT PRIMARY KEY,
+        new_chng TEXT,
+        updated_at TEXT NOT NULL
+      )
+    `);
+  }
+
   async getPriceChange(liquorCode: string): Promise<string | null> {
+    await this.ensurePriceBookChangesTable();
     const r = await this.db.select().from(schema.priceBookChanges)
       .where(eq(schema.priceBookChanges.liquorCode, liquorCode)).limit(1);
     return r[0]?.newChng ?? null;
   }
 
   async getPriceChangeBatch(liquorCodes: string[]): Promise<Map<string, string | null>> {
+    await this.ensurePriceBookChangesTable();
     const map = new Map<string, string | null>();
     if (!liquorCodes.length) return map;
     const rows = await this.db.select().from(schema.priceBookChanges)
@@ -331,6 +343,7 @@ export class D1Storage {
   }
 
   async bulkUpsertPriceChanges(changes: Array<{ liquorCode: string; newChng: string | null }>): Promise<void> {
+    await this.ensurePriceBookChangesTable();
     if (!changes.length) return;
     const now = new Date().toISOString();
     const CHUNK = 50;
@@ -350,6 +363,7 @@ export class D1Storage {
   }
 
   async clearPriceBookChanges(): Promise<void> {
+    await this.ensurePriceBookChangesTable();
     await this.db.delete(schema.priceBookChanges);
   }
 }
