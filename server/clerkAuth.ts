@@ -58,6 +58,14 @@ export async function verifyClerkToken(token: string): Promise<Record<string, an
 }
 
 export const isAuthenticated: RequestHandler = async (req: any, res, next) => {
+  // Local/dev fallback: if Clerk isn't configured, allow requests through so
+  // scanner/sessions/custom-names routes still work without auth setup.
+  if (!process.env.CLERK_PUBLISHABLE_KEY) {
+    req.clerkUserId = "local-dev-user";
+    req.clerkPayload = { sub: "local-dev-user" };
+    return next();
+  }
+
   const authHeader = req.headers["authorization"];
   if (!authHeader?.startsWith("Bearer ")) {
     console.log(`[clerkAuth] ${req.method} ${req.path} → no Bearer token`);
