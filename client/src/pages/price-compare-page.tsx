@@ -276,12 +276,14 @@ export default function PriceComparePage() {
 
   // ── Load on mount ─────────────────────────────────────────────────────────
   useEffect(() => {
-  if (!isReady || !user) return;        // <-- add as first line
-  let cancelled = false;
-  // ...everything else unchanged...
-  tryCloud();
-  return () => { cancelled = true; };
-}, [isReady, user]);                    // <-- change from [] to [isReady, user]
+    if (!isReady || !user) return;
+    let cancelled = false;
+
+    const local = loadLocalSession();
+    if (local) {
+      setRows(local.rows);
+      setFileName(local.fileName);
+    }
 
     const storedId   = loadStoredSessionId();
     const storedName = loadStoredSessionName();
@@ -323,7 +325,7 @@ export default function PriceComparePage() {
     tryCloud();
     return () => { cancelled = true; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [isReady, user]);
 
   // ── Flush on unmount ──────────────────────────────────────────────────────
   useEffect(() => {
