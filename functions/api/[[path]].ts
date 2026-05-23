@@ -86,6 +86,14 @@ async function verifyClerkToken(token: string, publishableKey: string): Promise<
 // ── Auth middleware ────────────────────────────────────────────────────────────
 
 const requireAuth = async (c: any, next: any) => {
+  // Local/dev fallback: when Clerk isn't configured, allow auth-protected
+  // routes so scanner/sessions/custom-name flows still work.
+  if (!c.env.CLERK_PUBLISHABLE_KEY) {
+    c.set('userId', 'local-dev-user');
+    await next();
+    return;
+  }
+
   const authHeader = c.req.header('Authorization');
   if (!authHeader?.startsWith('Bearer ')) return c.json({ error: 'Unauthorized' }, 401);
   const userId = await verifyClerkToken(authHeader.slice(7), c.env.CLERK_PUBLISHABLE_KEY);
@@ -103,6 +111,10 @@ app.get('/config', (c) => {
 // ── Auth endpoints ────────────────────────────────────────────────────────────
 
 app.get('/auth/user', async (c) => {
+  if (!c.env.CLERK_PUBLISHABLE_KEY) {
+    return c.json({ id: 'local-dev-user' });
+  }
+
   const authHeader = c.req.header('Authorization');
   if (!authHeader?.startsWith('Bearer ')) return c.json(null, 401);
   const userId = await verifyClerkToken(authHeader.slice(7), c.env.CLERK_PUBLISHABLE_KEY);
