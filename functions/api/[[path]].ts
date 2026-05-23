@@ -294,18 +294,34 @@ app.post('/fetch-price-changes', async (c) => {
     const rows: any[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null });
     if (!rows.length) throw new Error('Empty Excel file');
 
-    const headerRow = rows[0].map((h: any) => String(h ?? '').toLowerCase().trim());
-    let liquorCodeIdx = headerRow.findIndex((h: string) => h === 'liqour code');
-    if (liquorCodeIdx === -1) liquorCodeIdx = headerRow.findIndex((h: string) => h === 'liquor code');
-    if (liquorCodeIdx === -1) liquorCodeIdx = headerRow.findIndex((h: string) => h.includes('liq') && h.includes('code'));
-    let newChngIdx = headerRow.findIndex((h: string) => h === 'new/chng');
-    if (newChngIdx === -1) newChngIdx = headerRow.findIndex((h: string) => h.includes('new') && h.includes('chng'));
-    if (newChngIdx === -1) newChngIdx = headerRow.findIndex((h: string) => h.includes('chng'));
-    if (liquorCodeIdx === -1) throw new Error(`Could not find liquor code column. Headers: ${headerRow.join(', ')}`);
-    if (newChngIdx === -1) throw new Error(`Could not find NEW/CHNG column. Headers: ${headerRow.join(', ')}`);
+    // Header row sometimes is not the first row. Scan the top rows and pick
+    // the row that contains both liquor code and new/chng columns.
+    let headerRowIndex = -1;
+    let liquorCodeIdx = -1;
+    let newChngIdx = -1;
+    const maxScan = Math.min(rows.length, 20);
+    for (let r = 0; r < maxScan; r++) {
+      const headerRow = (rows[r] || []).map((h: any) => String(h ?? '').toLowerCase().trim());
+      let lc = headerRow.findIndex((h: string) => h === 'liqour code');
+      if (lc === -1) lc = headerRow.findIndex((h: string) => h === 'liquor code');
+      if (lc === -1) lc = headerRow.findIndex((h: string) => h.includes('liq') && h.includes('code'));
+      let nc = headerRow.findIndex((h: string) => h === 'new/chng');
+      if (nc === -1) nc = headerRow.findIndex((h: string) => h.includes('new') && h.includes('chng'));
+      if (nc === -1) nc = headerRow.findIndex((h: string) => h.includes('chng'));
+      if (lc !== -1 && nc !== -1) {
+        headerRowIndex = r;
+        liquorCodeIdx = lc;
+        newChngIdx = nc;
+        break;
+      }
+    }
+    if (headerRowIndex === -1) {
+      const sample = (rows[0] || []).map((h: any) => String(h ?? '').toLowerCase().trim()).join(', ');
+      throw new Error(`Could not find liquor/new-chng headers. First row: ${sample}`);
+    }
 
     const changes: Array<{ liquorCode: string; newChng: string | null }> = [];
-    for (let i = 1; i < rows.length; i++) {
+    for (let i = headerRowIndex + 1; i < rows.length; i++) {
       const row = rows[i];
       if (!row) continue;
       const rawCode = row[liquorCodeIdx];
