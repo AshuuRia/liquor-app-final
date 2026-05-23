@@ -236,8 +236,14 @@ app.get('/search-liquor', async (c) => {
     const storage = db(c);
     const { results, totalFound } = await storage.searchLiquorRecords(query, 50);
     const codes = results.map((r: any) => r.liquorCode).filter(Boolean) as string[];
-    const priceChanges = await storage.getPriceChangeBatch(codes);
-    const resultsWithChanges = results.map((r: any) => ({ ...r, priceChange: priceChanges.get(r.liquorCode) ?? null }));
+    let resultsWithChanges = results.map((r: any) => ({ ...r, priceChange: null }));
+    try {
+      const priceChanges = await storage.getPriceChangeBatch(codes);
+      resultsWithChanges = results.map((r: any) => ({ ...r, priceChange: priceChanges.get(r.liquorCode) ?? null }));
+    } catch (priceErr) {
+      // If price_book_changes table isn't created yet, search should still work.
+      console.warn('search-liquor: price change join skipped:', String(priceErr));
+    }
     return c.json({ success: true, results: resultsWithChanges, totalFound });
   } catch (err) {
     console.error('search-liquor error:', err);
