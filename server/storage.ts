@@ -136,8 +136,10 @@ export class DatabaseStorage implements IStorage {
 
   async searchLiquorRecords(query: string, limit = 10): Promise<{ results: LiquorRecord[], totalFound: number }> {
     if (query.length < 2) return { results: [], totalFound: 0 };
-    const q = `%${query}%`;
-    const norm = normalizeUpc(query);
+    const trimmed = query.trim();
+    const q = `%${trimmed}%`;
+    const qLower = trimmed.toLowerCase();
+    const norm = normalizeUpc(trimmed);
     const results = await this.db.select().from(liquorRecords).where(
       or(
         ilike(liquorRecords.liquorCode, q),
@@ -148,7 +150,20 @@ export class DatabaseStorage implements IStorage {
         norm ? sql`ltrim(${liquorRecords.upcCode1}, '0') = ${norm}` : sql`false`,
         norm ? sql`ltrim(${liquorRecords.upcCode2}, '0') = ${norm}` : sql`false`,
       )
-    ).limit(limit);
+    ).orderBy(sql`
+      CASE
+        WHEN lower(${liquorRecords.liquorCode}) = ${qLower} THEN 0
+        WHEN ltrim(${liquorRecords.liquorCode}, '0') = ${norm} THEN 1
+        WHEN ltrim(${liquorRecords.upcCode1}, '0') = ${norm} THEN 2
+        WHEN ltrim(${liquorRecords.upcCode2}, '0') = ${norm} THEN 3
+        WHEN lower(${liquorRecords.brandName}) = ${qLower} THEN 4
+        WHEN lower(${liquorRecords.brandName}) LIKE ${qLower + '%'} THEN 5
+        WHEN lower(${liquorRecords.brandName}) LIKE ${'%' + qLower + '%'} THEN 6
+        WHEN lower(${liquorRecords.vendorName}) LIKE ${qLower + '%'} THEN 7
+        ELSE 9
+      END,
+      length(${liquorRecords.brandName}) ASC
+    `).limit(limit);
     return { results, totalFound: results.length };
   }
 
@@ -438,7 +453,27 @@ export class MemStorage implements IStorage {
       if (r.vendorName?.toLowerCase().includes(q)) return true;
       return false;
     });
-    return { results: all.slice(0, limit), totalFound: all.length };
+    const scored = all.sort((a, b) => {
+      const score = (r: LiquorRecord) => {
+        const code = (r.liquorCode || '').toLowerCase();
+        const bname = (r.brandName || '').toLowerCase();
+        const vendor = (r.vendorName || '').toLowerCase();
+        if (code === q) return 0;
+        if (normalizeUpc(r.liquorCode) === norm) return 1;
+        if (normalizeUpc(r.upcCode1) === norm) return 2;
+        if (normalizeUpc(r.upcCode2) === norm) return 3;
+        if (bname === q) return 4;
+        if (bname.startsWith(q)) return 5;
+        if (bname.includes(q)) return 6;
+        if (vendor.startsWith(q)) return 7;
+        return 9;
+      };
+      const sa = score(a);
+      const sb = score(b);
+      if (sa !== sb) return sa - sb;
+      return (a.brandName || '').length - (b.brandName || '').length;
+    });
+    return { results: scored.slice(0, limit), totalFound: scored.length };
   }
 
   async addScannedItem(insertItem: InsertScannedItem): Promise<ScannedItem> {

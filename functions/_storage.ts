@@ -86,6 +86,8 @@ export class D1Storage {
 
   async searchLiquorRecords(query: string, limit = 10): Promise<{ results: any[], totalFound: number }> {
     if (query.length < 2) return { results: [], totalFound: 0 };
+    const trimmed = query.trim();
+    const qLower = trimmed.toLowerCase();
     const q = `%${query}%`;
     const norm = normalizeUpc(query);
     const results = await this.db.select().from(schema.liquorRecords).where(
@@ -98,7 +100,20 @@ export class D1Storage {
         norm ? sql`ltrim(${schema.liquorRecords.upcCode1}, '0') = ${norm}` : sql`0`,
         norm ? sql`ltrim(${schema.liquorRecords.upcCode2}, '0') = ${norm}` : sql`0`,
       )
-    ).limit(limit);
+    ).orderBy(sql`
+      CASE
+        WHEN lower(${schema.liquorRecords.liquorCode}) = ${qLower} THEN 0
+        WHEN ltrim(${schema.liquorRecords.liquorCode}, '0') = ${norm} THEN 1
+        WHEN ltrim(${schema.liquorRecords.upcCode1}, '0') = ${norm} THEN 2
+        WHEN ltrim(${schema.liquorRecords.upcCode2}, '0') = ${norm} THEN 3
+        WHEN lower(${schema.liquorRecords.brandName}) = ${qLower} THEN 4
+        WHEN lower(${schema.liquorRecords.brandName}) LIKE ${qLower + '%'} THEN 5
+        WHEN lower(${schema.liquorRecords.brandName}) LIKE ${'%' + qLower + '%'} THEN 6
+        WHEN lower(${schema.liquorRecords.vendorName}) LIKE ${qLower + '%'} THEN 7
+        ELSE 9
+      END,
+      length(${schema.liquorRecords.brandName}) ASC
+    `).limit(limit);
     return { results, totalFound: results.length };
   }
 
