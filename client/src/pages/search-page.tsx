@@ -2,8 +2,6 @@ import { useState, useRef, useEffect } from "react";
 import { Search, X, Package, ChevronRight, TrendingUp, TrendingDown, Sparkles } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import type { LiquorRecord } from "@shared/schema";
-import { useAuthReady } from "@/hooks/use-auth-ready";
-import { getAuthHeaders } from "@/lib/queryClient";
 
 type LiquorRecordWithChange = LiquorRecord & { priceChange?: string | null };
 
@@ -74,7 +72,6 @@ function DetailSheet({ record, onClose }: { record: LiquorRecordWithChange; onCl
             </button>
           </div>
 
-          {/* Price change badge */}
           {record.priceChange && (
             <div className="mb-4">
               <PriceChangeBadge change={record.priceChange} />
@@ -128,32 +125,30 @@ export default function SearchPage() {
   const [selected, setSelected] = useState<LiquorRecordWithChange | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout>>();
   const inputRef    = useRef<HTMLInputElement>(null);
-  const { user, isReady } = useAuthReady();
 
-useEffect(() => {
-  if (!isReady || !user) { setResults([]); setTotal(0); return; }   // <-- add
-  if (query.length < 2) { setResults([]); setTotal(0); return; }
-  clearTimeout(debounceRef.current);
-  setLoading(true);
-  debounceRef.current = setTimeout(async () => {
-    try {
-      const authHeaders = await getAuthHeaders();                   // <-- add
-      const r = await fetch(`/api/search-liquor?query=${encodeURIComponent(query)}`, {
-        headers: authHeaders,                                       // <-- add
-      });
-      const d = await r.json();
-      setResults(d.results || []);
-      setTotal(d.totalFound || 0);
-    } catch { /* ignore */ } finally { setLoading(false); }
-  }, 280);
-  return () => clearTimeout(debounceRef.current);
-}, [query, isReady, user]);                                         // <-- add isReady, user
+  useEffect(() => {
+    if (query.length < 2) { setResults([]); setTotal(0); return; }
+    clearTimeout(debounceRef.current);
+    setLoading(true);
+    debounceRef.current = setTimeout(async () => {
+      try {
+        const r = await fetch(`/api/search-liquor?query=${encodeURIComponent(query)}`);
+        const d = await r.json();
+        setResults(d.results || []);
+        setTotal(d.totalFound || 0);
+      } catch {
+        // ignore
+      } finally {
+        setLoading(false);
+      }
+    }, 280);
+    return () => clearTimeout(debounceRef.current);
+  }, [query]);
 
   return (
     <div className="flex flex-col h-screen bg-zinc-50 dark:bg-zinc-950"
          style={{ paddingTop: "env(safe-area-inset-top)", paddingBottom: "4rem" }}>
 
-      {/* Header */}
       <div className="bg-white dark:bg-zinc-900 px-4 pt-4 pb-3 shadow-sm">
         <h1 className="text-xl font-bold text-zinc-900 dark:text-zinc-100 mb-3">Search</h1>
         <div className="relative">
@@ -178,7 +173,6 @@ useEffect(() => {
         </div>
       </div>
 
-      {/* Results */}
       <div className="flex-1 overflow-y-auto">
         {loading && (
           <div className="flex items-center justify-center py-12">
@@ -220,23 +214,17 @@ useEffect(() => {
                   className="w-full bg-white dark:bg-zinc-900 rounded-xl px-4 py-3.5 text-left flex items-center gap-3 shadow-sm active:bg-zinc-50"
                 >
                   <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className="font-semibold text-sm text-zinc-900 dark:text-zinc-100 truncate">{item.brandName}</span>
-                      {item.priceChange && <PriceChangeBadge change={item.priceChange} />}
+                    <div className="font-semibold text-zinc-900 dark:text-zinc-100 truncate">{item.brandName}</div>
+                    <div className="text-xs text-zinc-500 mt-0.5 truncate">
+                      {item.bottleSize} · Code {item.liquorCode}
                     </div>
-                    <div className="flex items-center gap-2 mt-0.5 flex-wrap">
-                      <span className="text-xs text-zinc-500">{item.bottleSize}</span>
-                      {item.proof && <span className="text-xs text-zinc-400">{item.proof}°</span>}
-                      <span className="text-xs text-zinc-400">· {item.liquorCode}</span>
-                    </div>
-                    {item.upcCode1 && item.upcCode1 !== "00000000000000" && (
-                      <div className="text-xs text-zinc-400 mt-0.5">UPC: {item.upcCode1}</div>
-                    )}
                   </div>
-                  <div className="flex items-center gap-2 flex-shrink-0">
-                    <span className="text-sm font-bold text-blue-600 dark:text-blue-400">{fmt(item.shelfPrice)}</span>
-                    <ChevronRight className="h-4 w-4 text-zinc-300" />
-                  </div>
+                  {item.priceChange ? (
+                    <PriceChangeBadge change={item.priceChange} />
+                  ) : (
+                    <span className="text-sm font-bold text-blue-600">{fmt(item.shelfPrice)}</span>
+                  )}
+                  <ChevronRight className="h-4 w-4 text-zinc-300" />
                 </button>
               ))}
             </div>
