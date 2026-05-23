@@ -1,21 +1,16 @@
-import { useEffect, useState } from "react";
-import type { User } from "@supabase/supabase-js";
-import { supabase } from "@/lib/supabase";
+// Thin wrapper around the existing useAuth hook so pages can gate effects on
+// "auth has been resolved AND there is a user". This project uses Clerk (or
+// Replit cookie auth in fallback mode) — there is NO Supabase client here.
+//
+// `isReady` flips to true once the /api/auth/user query has finished its first
+// fetch (success or 401). `user` is null when unauthenticated.
+
+import { useAuth } from "./use-auth";
 
 export function useAuthReady() {
-  const [isReady, setIsReady] = useState(false);
-  const [user, setUser] = useState<User | null>(null);
-
-  useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setUser(session?.user ?? null);
-      setIsReady(true);
-    });
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      (_event, session) => setUser(session?.user ?? null),
-    );
-    return () => subscription.unsubscribe();
-  }, []);
-
-  return { user, isReady };
+  const { user, isLoading } = useAuth();
+  return {
+    user: user ?? null,
+    isReady: !isLoading,
+  };
 }
