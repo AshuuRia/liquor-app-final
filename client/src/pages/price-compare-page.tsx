@@ -611,12 +611,12 @@ useEffect(() => {
     if (diff === null) return <Badge variant="outline" className="text-xs">No match</Badge>;
     if (diff === 0)    return <Badge variant="secondary" className="text-xs">No change</Badge>;
     if (diff > 0) return (
-      <Badge className="text-xs bg-red-100 text-red-700 border-red-200 hover:bg-red-100">
+      <Badge className="text-xs bg-green-100 text-green-700 border-green-200 hover:bg-green-100">
         <TrendingUp className="h-3 w-3 mr-1" />+${diff.toFixed(2)}
       </Badge>
     );
     return (
-      <Badge className="text-xs bg-green-100 text-green-700 border-green-200 hover:bg-green-100">
+      <Badge className="text-xs bg-red-100 text-red-700 border-red-200 hover:bg-red-100">
         <TrendingDown className="h-3 w-3 mr-1" />${diff.toFixed(2)}
       </Badge>
     );
@@ -879,8 +879,8 @@ useEffect(() => {
                 {/* Summary cards */}
                 <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
                   {[
-                    { label: "Increased", count: totalIncreased, icon: <TrendingUp className="h-4 w-4 text-red-500" />, color: "text-red-600", active: filter === "increased", f: "increased" as Filter },
-                    { label: "Decreased", count: totalDecreased, icon: <TrendingDown className="h-4 w-4 text-green-500" />, color: "text-green-600", active: filter === "decreased", f: "decreased" as Filter },
+                    { label: "Increased", count: totalIncreased, icon: <TrendingUp className="h-4 w-4 text-green-500" />, color: "text-green-600", active: filter === "increased", f: "increased" as Filter },
+                    { label: "Decreased", count: totalDecreased, icon: <TrendingDown className="h-4 w-4 text-red-500" />, color: "text-red-600", active: filter === "decreased", f: "decreased" as Filter },
                     { label: "Same",      count: totalSame,      icon: <CheckCircle className="h-4 w-4 text-blue-500" />,   color: "text-blue-600",  active: filter === "same",      f: "same" as Filter },
                     { label: "Not found", count: totalNotFound,  icon: <AlertCircle className="h-4 w-4 text-amber-500" />, color: "text-amber-600", active: filter === "notfound",  f: "notfound" as Filter },
                     { label: "Ambiguous", count: totalAmbiguous, icon: <HelpCircle className="h-4 w-4 text-orange-500" />, color: "text-orange-600", active: filter === "ambiguous", f: "ambiguous" as Filter },
@@ -939,18 +939,18 @@ useEffect(() => {
                 </Card>
                 <Card className="flex-1 min-w-[100px]">
                   <CardContent className="py-3 px-4 flex items-center gap-2">
-                    <TrendingUp className="h-4 w-4 text-red-500" />
+                    <TrendingUp className="h-4 w-4 text-green-500" />
                     <div>
-                      <p className="text-xl font-bold text-red-600">{scanIncreased}</p>
+                      <p className="text-xl font-bold text-green-600">{scanIncreased}</p>
                       <p className="text-xs text-muted-foreground">Price up</p>
                     </div>
                   </CardContent>
                 </Card>
                 <Card className="flex-1 min-w-[100px]">
                   <CardContent className="py-3 px-4 flex items-center gap-2">
-                    <TrendingDown className="h-4 w-4 text-green-500" />
+                    <TrendingDown className="h-4 w-4 text-red-500" />
                     <div>
-                      <p className="text-xl font-bold text-green-600">{scanDecreased}</p>
+                      <p className="text-xl font-bold text-red-600">{scanDecreased}</p>
                       <p className="text-xs text-muted-foreground">Price down</p>
                     </div>
                   </CardContent>

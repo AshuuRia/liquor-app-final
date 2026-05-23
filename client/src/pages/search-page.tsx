@@ -28,7 +28,7 @@ function PriceChangeBadge({ change }: { change: string | null | undefined }) {
 
   if (num > 0) {
     return (
-      <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-300 text-xs font-bold">
+      <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-300 text-xs font-bold">
         <TrendingUp className="h-3 w-3" />
         +${num.toFixed(2)}
       </span>
@@ -37,7 +37,7 @@ function PriceChangeBadge({ change }: { change: string | null | undefined }) {
 
   if (num < 0) {
     return (
-      <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-300 text-xs font-bold">
+      <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-300 text-xs font-bold">
         <TrendingDown className="h-3 w-3" />
         -${Math.abs(num).toFixed(2)}
       </span>
