@@ -327,12 +327,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
     console.log('Fetching price change data from Michigan state Excel...');
     try {
       const excelUrl = 'https://www.michigan.gov/lara/-/media/Project/Websites/lara/lcc/Price-Book/5-3-26-PRICE-BOOK-Excel.xlsx?rev=6a054889b3c3465a88a3ae2656a6733b&hash=95B952FA318836F5B90F5E2F90EB3E65';
-      const response = await fetch(excelUrl, {
-        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
-        signal: AbortSignal.timeout(120000),
-      });
-      if (!response.ok) throw new Error(`Failed to download Excel: ${response.status} ${response.statusText}`);
-      const buffer = await response.arrayBuffer();
+      const localFilePath = new URL("../client/public/data/price-book.xlsx", import.meta.url);
+
+      let buffer: ArrayBuffer;
+      try {
+        const fs = await import("node:fs/promises");
+        const localFile = await fs.readFile(localFilePath);
+        buffer = localFile.buffer.slice(localFile.byteOffset, localFile.byteOffset + localFile.byteLength);
+      } catch {
+        const response = await fetch(excelUrl, {
+          headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
+          signal: AbortSignal.timeout(120000),
+        });
+        if (!response.ok) throw new Error(`Failed to download Excel: ${response.status} ${response.statusText}`);
+        buffer = await response.arrayBuffer();
+      }
       const workbook = XLSX.read(Buffer.from(buffer), { type: 'buffer' });
       const sheet = workbook.Sheets[workbook.SheetNames[0]];
       const rows: any[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null });

@@ -2,8 +2,6 @@ import { useState, useRef, useEffect } from "react";
 import { Search, X, Package, ChevronRight, TrendingUp, TrendingDown, Sparkles } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import type { LiquorRecord } from "@shared/schema";
-import { useAuthReady } from "@/hooks/use-auth-ready";
-import { getAuthHeaders } from "@/lib/queryClient";
 
 type LiquorRecordWithChange = LiquorRecord & { priceChange?: string | null };
 
@@ -128,26 +126,20 @@ export default function SearchPage() {
   const [selected, setSelected] = useState<LiquorRecordWithChange | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout>>();
   const inputRef    = useRef<HTMLInputElement>(null);
-  const { user, isReady } = useAuthReady();
-
 useEffect(() => {
-  if (!isReady || !user) { setResults([]); setTotal(0); return; }   // <-- add
   if (query.length < 2) { setResults([]); setTotal(0); return; }
   clearTimeout(debounceRef.current);
   setLoading(true);
   debounceRef.current = setTimeout(async () => {
     try {
-      const authHeaders = await getAuthHeaders();                   // <-- add
-      const r = await fetch(`/api/search-liquor?query=${encodeURIComponent(query)}`, {
-        headers: authHeaders,                                       // <-- add
-      });
+      const r = await fetch(`/api/search-liquor?query=${encodeURIComponent(query)}`);
       const d = await r.json();
       setResults(d.results || []);
       setTotal(d.totalFound || 0);
     } catch { /* ignore */ } finally { setLoading(false); }
   }, 280);
   return () => clearTimeout(debounceRef.current);
-}, [query, isReady, user]);                                         // <-- add isReady, user
+}, [query]);
 
   return (
     <div className="flex flex-col h-screen bg-zinc-50 dark:bg-zinc-950"
