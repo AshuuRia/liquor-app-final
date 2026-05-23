@@ -1,0 +1,6 @@
+Upc,Department,qty,cents,incltaxes,inclfees,Name,size,ebt,byweight,"Fee Multiplier",cost_qty,cost_cents,variable_price,addstock,setstock,pack_name,pack_qty,pack_upc,unit_upc,unit_count,is_oneclick,oc_color,oc_border_color,oc_text_color,oc_fixedpos,oc_page,oc_key,oc_relpos
+"=""080686001010""",Liquor,1,100,n,n,"Jim Beam Red Stag Bourbon 50ML","=""12374""",,n,1,1,0,n,,"=""0""",,,,,,n,,,,,,,
+"=""080686001027""",Liquor,1,1999,n,n,"Jim Beam Red Stag Bourbon 750ML","=""12371""",,n,1,0,0,n,,"=""0""",,,,,,n,,,,,,,
+"=""080686001041""",Liquor,1,699,n,n,"Jim Beam Red Stag 200ML","=""12375""",,n,1,1,0,n,,"=""0""",,,,,,n,,,,,,,
+"=""080686001058""",Liquor,1,1099,n,n,"Jim Beam Red Stag Bourbon 375ML","="" 12376""",,n,1,0,0,n,,"=""0""",,,,,,n,,,,,,,
+"=""080686001072""",Liquor,1,3999,n,n,"Jim Beam Red Stag Bourbon 1750ML","=""12373""",,n,1,0,0,n,,"=""0""",,,,,,n,,,,,,,

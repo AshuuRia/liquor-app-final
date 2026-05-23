@@ -1,0 +1,130 @@
+{
+  "wallTime": 2,
+  "cpuTime": 1,
+  "truncated": false,
+  "executionModel": "stateless",
+  "outcome": "exception",
+  "scriptVersion": {
+    "id": "23a876b7-6b03-4c24-9930-5942fd7d7124"
+  },
+  "scriptName": "pages-worker--13599665-production",
+  "diagnosticsChannelEvents": [],
+  "exceptions": [
+    {
+      "stack": "    at _Hono.getPath (functionsWorker-0.7637116790173089.js:1159:21)\n    at #dispatch (functionsWorker-0.7637116790173089.js:2292:23)\n    at fetch (functionsWorker-0.7637116790173089.js:2341:26)\n    at next (functionsWorker-0.7637116790173089.js:44482:32)\n    at Object.fetch (functionsWorker-0.7637116790173089.js:44496:20)",
+      "name": "TypeError",
+      "message": "Cannot read properties of undefined (reading 'indexOf')",
+      "timestamp": 1778271376675
+    }
+  ],
+  "logs": [],
+  "eventTimestamp": 1778271376611,
+  "event": {
+    "request": {
+      "url": "https://liquor-app.pages.dev/api/login",
+      "method": "GET",
+      "headers": {
+        "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+        "accept-encoding": "gzip, br",
+        "accept-language": "en-US,en;q=0.9",
+        "cf-connecting-ip": "47.26.0.59",
+        "cf-ipcountry": "US",
+        "cf-ray": "9f8b2427cf34fc38",
+        "cf-visitor": "{\"scheme\":\"https\"}",
+        "connection": "Keep-Alive",
+        "host": "liquor-app.pages.dev",
+        "priority": "u=0, i",
+        "referer": "https://liquor-app.pages.dev/",
+        "sec-ch-ua": "\"Google Chrome\";v=\"147\", \"Not.A/Brand\";v=\"8\", \"Chromium\";v=\"147\"",
+        "sec-ch-ua-mobile": "?0",
+        "sec-ch-ua-platform": "\"Windows\"",
+        "sec-fetch-dest": "document",
+        "sec-fetch-mode": "navigate",
+        "sec-fetch-site": "same-origin",
+        "sec-fetch-user": "?1",
+        "upgrade-insecure-requests": "1",
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36",
+        "x-forwarded-proto": "https",
+        "x-real-ip": "47.26.0.59"
+      },
+      "cf": {
+        "httpProtocol": "HTTP/3",
+        "clientAcceptEncoding": "gzip, deflate, br",
+        "requestPriority": "",
+        "edgeRequestKeepAliveStatus": 1,
+        "requestHeaderNames": {},
+        "clientTcpRtt": 0,
+        "clientQuicRtt": 19,
+        "colo": "ORD",
+        "asn": 20115,
+        "asOrganization": "Charter Communications LLC",
+        "country": "US",
+        "isEUCountry": false,
+        "city": "Grand Haven",
+        "continent": "NA",
+        "region": "Michigan",
+        "regionCode": "MI",
+        "timezone": "America/Detroit",
+        "longitude": "-86.22839",
+        "latitude": "43.06307",
+        "postalCode": "49417",
+        "metroCode": "563",
+        "tlsVersion": "TLSv1.3",
+        "tlsCipher": "AEAD-AES128-GCM-SHA256",
+        "tlsClientRandom": "4X4ki2ndeFgrLzYaxJQeWXgGcosspavZ7dftepz92tg=",
+        "tlsClientCiphersSha1": "3HTt3+R/6BL3zeALJDSq0pR1yOQ=",
+        "tlsClientExtensionsSha1": "dqGX2zGvjMYnA0AZitYlaEFBXnQ=",
+        "tlsClientExtensionsSha1Le": "LkVjO+Cq9XsjdB/VpL/tiUuhrXM=",
+        "tlsExportedAuthenticator": {
+          "clientHandshake": "7a189d4c52fa58ea78e6a0d276b9be8aa86af18a7cdcd0c1f2b93e23a6c8d6c8",
+          "serverHandshake": "95989f76b1151c149518f0abdb7caed2ef2c0da3c7cb79b724881ab95661ade3",
+          "clientFinished": "53f1a2de6340e5ef038eab6c8c061ba2f6d16b1adee01ea5c67181dcc81bb5be",
+          "serverFinished": "756f87a153a4d2b95da791421d6cafd686af1ea4997c869ce8658fa0736f8502"
+        },
+        "tlsClientHelloLength": "1761",
+        "tlsClientAuth": {
+          "certPresented": "0",
+          "certVerified": "NONE",
+          "certRevoked": "0",
+          "certIssuerDN": "",
+          "certSubjectDN": "",
+          "certIssuerDNRFC2253": "",
+          "certSubjectDNRFC2253": "",
+          "certIssuerDNLegacy": "",
+          "certSubjectDNLegacy": "",
+          "certSerial": "",
+          "certIssuerSerial": "",
+          "certSKI": "",
+          "certIssuerSKI": "",
+          "certFingerprintSHA1": "",
+          "certFingerprintSHA256": "",
+          "certNotBefore": "",
+          "certNotAfter": "",
+          "certRFC9440": "",
+          "certRFC9440TooLarge": false,
+          "certChainRFC9440": "",
+          "certChainRFC9440TooLarge": false
+        },
+        "verifiedBotCategory": "",
+        "edgeL4": {
+          "deliveryRate": 77201
+        },
+        "pagesHostName": "liquor-app.pages.dev",
+        "botManagement": {
+          "corporateProxy": false,
+          "verifiedBot": false,
+          "jsDetection": {
+            "passed": false
+          },
+          "staticResource": false,
+          "detectionIds": {},
+          "score": 99
+        }
+      }
+    },
+    "response": {
+      "status": 500
+    }
+  },
+  "id": 0
+}
