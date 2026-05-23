@@ -148,7 +148,8 @@ async function fetchPriceChangesInternal(): Promise<{ success: boolean; totalCha
       headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
       signal: AbortSignal.timeout(120000),
     });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const buffer = await response.arrayBuffer();
     const workbook = XLSX.read(Buffer.from(buffer), { type: 'buffer' });
     const sheet = workbook.Sheets[workbook.SheetNames[0]];
@@ -298,7 +299,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         uniqueVendors: vendors.size,
         avgPrice: Number(avgPrice.toFixed(2)),
         priceChanges: priceChangeResult,
-      });
+              });
     } catch (error) {
       console.error("Data fetch error:", error);
       if (!res.headersSent) res.status(500).json({ success: false, error: "Failed to fetch liquor data", details: error instanceof Error ? error.message : "Unknown error" });
@@ -327,12 +328,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
     console.log('Fetching price change data from Michigan state Excel...');
     try {
       const excelUrl = 'https://www.michigan.gov/lara/-/media/Project/Websites/lara/lcc/Price-Book/5-3-26-PRICE-BOOK-Excel.xlsx?rev=6a054889b3c3465a88a3ae2656a6733b&hash=95B952FA318836F5B90F5E2F90EB3E65';
-      const response = await fetch(excelUrl, {
-        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
-        signal: AbortSignal.timeout(120000),
-      });
-      if (!response.ok) throw new Error(`Failed to download Excel: ${response.status} ${response.statusText}`);
-      const buffer = await response.arrayBuffer();
+      const localFilePath = new URL("../client/public/data/price-book.xlsx", import.meta.url);
+
+      let buffer: ArrayBuffer;
+      try {
+        const fs = await import("node:fs/promises");
+        const localFile = await fs.readFile(localFilePath);
+        buffer = localFile.buffer.slice(localFile.byteOffset, localFile.byteOffset + localFile.byteLength);
+      } catch {
+        const response = await fetch(excelUrl, {
+          headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
+          signal: AbortSignal.timeout(120000),
+        });
+        if (!response.ok) throw new Error(`Failed to download Excel: ${response.status} ${response.statusText}`);
+        buffer = await response.arrayBuffer();
+      }
       const workbook = XLSX.read(Buffer.from(buffer), { type: 'buffer' });
       const sheet = workbook.Sheets[workbook.SheetNames[0]];
       const rows: any[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null });
@@ -439,8 +449,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.status(500).json({ success: false, error: "Failed to process barcode scan" });
     }
   });
-
-  // ── Scanned items ─────────────────────────────────────────────────────────────
+    // ── Scanned items ─────────────────────────────────────────────────────────────
 
   app.get("/api/scanned-items/:sessionId", isAuthenticated, async (req: any, res) => {
     try {
@@ -589,7 +598,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       res.json({ success: true, mappingsAdded: mappings.length });
     } catch (error) {
-      console.error("Custom names error:", error);
+            console.error("Custom names error:", error);
       res.status(500).json({ success: false, error: "Failed to save custom name mappings" });
     }
   });
@@ -739,7 +748,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { sessionId } = req.params;
       const deleted = await storage.deleteSession(sessionId);
       if (deleted) {
-        res.json({ success: true, message: "Session deleted" });
+                res.json({ success: true, message: "Session deleted" });
       } else {
         res.status(404).json({ success: false, error: "Session not found" });
       }
