@@ -220,6 +220,15 @@ app.post('/fetch-liquor-data', async (c) => {
   }
 });
 
+app.get('/db-status', async (c) => {
+  try {
+    const count = await db(c).getLiquorRecordCount();
+    return c.json({ count });
+  } catch (err) {
+    return c.json({ count: 0, error: String(err) });
+  }
+});
+
 app.get('/search-liquor', async (c) => {
   try {
     const query = c.req.query('query') || '';
@@ -231,7 +240,8 @@ app.get('/search-liquor', async (c) => {
     const resultsWithChanges = results.map((r: any) => ({ ...r, priceChange: priceChanges.get(r.liquorCode) ?? null }));
     return c.json({ success: true, results: resultsWithChanges, totalFound });
   } catch (err) {
-    return c.json({ success: false, error: 'Failed to search' }, 500);
+    console.error('search-liquor error:', err);
+    return c.json({ success: false, error: 'Failed to search', details: String(err) }, 500);
   }
 });
 
