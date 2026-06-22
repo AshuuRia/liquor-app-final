@@ -412,7 +412,7 @@ useEffect(() => {
 
   // ── File handling ─────────────────────────────────────────────────────────
   const processFile = useCallback(async (file: File) => {
-    if (!file.name.endsWith(".csv")) {
+    if (!/\.csv$/i.test(file.name)) {
       toast({ variant: "destructive", title: "Wrong file type", description: "Please upload a CSV file." });
       return;
     }
@@ -430,7 +430,11 @@ useEffect(() => {
         credentials: "include",
         body: JSON.stringify({ csvText }),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => null);
+      if (!res.ok) {
+        throw new Error(data?.error || `Upload failed (${res.status})`);
+      }
+      if (!data) throw new Error("Upload failed: server returned an invalid response.");
       if (!data.success) throw new Error(data.error || "Unknown error");
 
       if (data.dbEmpty) {

@@ -630,13 +630,25 @@ app.post('/compare-prices', requireAuth, async (c) => {
     const lines = csvText.split(/\r?\n/).filter((l: string) => l.trim());
     if (lines.length < 2) return c.json({ success: false, error: 'CSV too short' }, 400);
 
-    const header = parseCsvLine(lines[0]).map((h: string) => h.toLowerCase().trim());
-    const col = (n: string) => header.indexOf(n);
-    const upcIdx = col('upc'), nameIdx = col('name'), priceIdx = col('price'),
-          centsIdx = col('cents'), deptIdx = col('department'), sizeIdx = col('size');
+    const normalizeHeader = (h: string) => h.toLowerCase().replace(/[^a-z0-9]/g, '');
+    const header = parseCsvLine(lines[0]).map(normalizeHeader);
+    const col = (...names: string[]) => {
+      const normalized = names.map(normalizeHeader);
+      for (const name of normalized) {
+        const exact = header.indexOf(name);
+        if (exact !== -1) return exact;
+      }
+      return header.findIndex((h: string) => normalized.some((name) => h.includes(name)));
+    };
+    const upcIdx = col('upc', 'upc code', 'barcode', 'unit upc'),
+          nameIdx = col('name', 'item name', 'description', 'product name'),
+          priceIdx = col('price', 'retail price', 'selling price'),
+          centsIdx = col('cents', 'price cents'),
+          deptIdx = col('department', 'dept'),
+          sizeIdx = col('size', 'liquor code');
 
     if (upcIdx === -1 || nameIdx === -1) {
-      return c.json({ success: false, error: 'CSV missing Upc or Name columns' }, 400);
+      return c.json({ success: false, error: 'CSV missing UPC/barcode or product name columns' }, 400);
     }
 
     const rows = [];
@@ -653,7 +665,7 @@ app.post('/compare-prices', requireAuth, async (c) => {
       if (!rawUpc && !rawName) continue;
 
       let registerPrice = 0;
-      if (rawCents) registerPrice = parseInt(rawCents, 10) / 100;
+      if (rawCents) registerPrice = parseInt(rawCents.replace(/[^0-9-]/g, ''), 10) / 100;
       else if (rawPrice) registerPrice = parseFloat(rawPrice.replace(/[^0-9.]/g, '')) || 0;
 
       let matches = await storage.findAllLiquorByBarcode(rawUpc);
