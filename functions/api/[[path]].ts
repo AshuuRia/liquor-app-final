@@ -25,6 +25,11 @@ app.use('*', cors({
 
 const db = (c: any) => new D1Storage(c.env.DB);
 
+function normalizeUpc(upc: string | null | undefined): string {
+  if (!upc) return '';
+  return upc.replace(/^0+/, '') || '0';
+}
+
 // ── Clerk JWT verification (no SDK needed — uses Web Crypto + Clerk REST API) ─
 
 let _jwksCache: any[] = [];
