@@ -30,6 +30,33 @@ function normalizeUpc(upc: string | null | undefined): string {
   return upc.replace(/^0+/, '') || '0';
 }
 
+function splitCsvRecords(csvText: string): string[] {
+  const records: string[] = [];
+  let current = '';
+  let inQuotes = false;
+
+  for (let i = 0; i < csvText.length; i++) {
+    const ch = csvText[i];
+    if (ch === '"') {
+      current += ch;
+      if (inQuotes && csvText[i + 1] === '"') {
+        current += csvText[++i];
+      } else {
+        inQuotes = !inQuotes;
+      }
+    } else if ((ch === '\n' || ch === '\r') && !inQuotes) {
+      if (ch === '\r' && csvText[i + 1] === '\n') i++;
+      records.push(current);
+      current = '';
+    } else {
+      current += ch;
+    }
+  }
+
+  if (current || csvText.endsWith('\n') || csvText.endsWith('\r')) records.push(current);
+  return records;
+}
+
 // ── Clerk JWT verification (no SDK needed — uses Web Crypto + Clerk REST API) ─
 
 let _jwksCache: any[] = [];
@@ -659,7 +686,7 @@ app.post('/compare-prices', requireAuth, async (c) => {
       return fields;
     }
 
-    const lines = csvText.split(/\r?\n/).filter((l: string) => l.trim());
+    const lines = splitCsvRecords(csvText).filter((l: string) => l.trim());
     if (lines.length < 2) return c.json({ success: false, error: 'CSV too short' }, 400);
 
     const normalizeHeader = (h: string) => h.toLowerCase().replace(/[^a-z0-9]/g, '');

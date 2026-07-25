@@ -55,6 +55,33 @@ type SortDir = "asc" | "desc";
 const MAX_VISIBLE_ROWS = 500;
 const MAX_IMPORT_ROWS_PER_REQUEST = 500;
 
+function splitCsvRecords(csvText: string): string[] {
+  const records: string[] = [];
+  let current = "";
+  let inQuotes = false;
+
+  for (let i = 0; i < csvText.length; i++) {
+    const ch = csvText[i];
+    if (ch === '"') {
+      current += ch;
+      if (inQuotes && csvText[i + 1] === '"') {
+        current += csvText[++i];
+      } else {
+        inQuotes = !inQuotes;
+      }
+    } else if ((ch === "\n" || ch === "\r") && !inQuotes) {
+      if (ch === "\r" && csvText[i + 1] === "\n") i++;
+      records.push(current);
+      current = "";
+    } else {
+      current += ch;
+    }
+  }
+
+  if (current || csvText.endsWith("\n") || csvText.endsWith("\r")) records.push(current);
+  return records;
+}
+
 // ── CSV export helpers ─────────────────────────────────────────────────────────
 
 function buildPtouchCsv(rows: ComparisonRow[], useCustomNames: boolean): string {
@@ -441,7 +468,7 @@ useEffect(() => {
         return data;
       };
 
-      const rawLines = csvText.split(/\r?\n/);
+      const rawLines = splitCsvRecords(csvText);
       const normalizeHeaderLine = (line: string) => line.toLowerCase().replace(/^\uFEFF/, '').replace(/[^a-z0-9,]/g, '');
       const headerIndex = rawLines.findIndex((line, index) => {
         if (index > 20) return false;

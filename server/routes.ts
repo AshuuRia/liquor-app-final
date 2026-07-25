@@ -112,6 +112,34 @@ function toBottleBarcode(barcode: string): string {
 
 // ── CSV parser for compare-prices ─────────────────────────────────────────────
 
+
+function splitCsvRecords(csvText: string): string[] {
+  const records: string[] = [];
+  let current = "";
+  let inQuotes = false;
+
+  for (let i = 0; i < csvText.length; i++) {
+    const ch = csvText[i];
+    if (ch === '"') {
+      current += ch;
+      if (inQuotes && csvText[i + 1] === '"') {
+        current += csvText[++i];
+      } else {
+        inQuotes = !inQuotes;
+      }
+    } else if ((ch === "\n" || ch === "\r") && !inQuotes) {
+      if (ch === "\r" && csvText[i + 1] === "\n") i++;
+      records.push(current);
+      current = "";
+    } else {
+      current += ch;
+    }
+  }
+
+  if (current || csvText.endsWith("\n") || csvText.endsWith("\r")) records.push(current);
+  return records;
+}
+
 function parseCsvLine(line: string): string[] {
   const fields: string[] = [];
   let cur = '';
@@ -791,7 +819,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         addToIndex(recordsByCode, record.liquorCode, record);
       }
 
-      const lines = csvText.split(/\r?\n/).filter((l: string) => l.trim());
+      const lines = splitCsvRecords(csvText).filter((l: string) => l.trim());
       if (lines.length < 2) return res.status(400).json({ success: false, error: "CSV appears empty" });
 
       const normalizeHeader = (h: string) => h.toLowerCase().replace(/^\uFEFF/, '').replace(/[^a-z0-9]/g, '');
