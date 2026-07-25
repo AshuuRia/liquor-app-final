@@ -53,6 +53,7 @@ type SortKey = "name" | "registerPrice" | "michiganPrice" | "priceDiff" | "newPr
 type SortDir = "asc" | "desc";
 
 const MAX_VISIBLE_ROWS = 500;
+const MAX_IMPORT_ROWS_PER_REQUEST = 500;
 
 // ── CSV export helpers ─────────────────────────────────────────────────────────
 
@@ -426,20 +427,31 @@ useEffect(() => {
     try {
       const csvText = await file.text();
       const authHeaders = await getAuthHeaders();
-      const res = await fetch("/api/compare-prices", {
-        method: "POST",
-        headers: { "Content-Type": "text/csv;charset=utf-8", ...authHeaders },
-        credentials: "include",
-        body: csvText,
-      });
-      const data = await res.json().catch(() => null);
-      if (!res.ok) {
-        throw new Error(data?.error || `Upload failed (${res.status})`);
-      }
-      if (!data) throw new Error("Upload failed: server returned an invalid response.");
-      if (!data.success) throw new Error(data.error || "Unknown error");
+      const postCompareChunk = async (chunkCsv: string, chunkNumber: number) => {
+        const res = await fetch("/api/compare-prices", {
+          method: "POST",
+          headers: { "Content-Type": "text/csv;charset=utf-8", ...authHeaders },
+          credentials: "include",
+          body: chunkCsv,
+        });
+        const data = await res.json().catch(() => null);
+        if (!res.ok) throw new Error(data?.error || `Upload failed on chunk ${chunkNumber} (${res.status})`);
+        if (!data) throw new Error(`Upload failed on chunk ${chunkNumber}: server returned an invalid response.`);
+        if (!data.success) throw new Error(data.error || `Upload failed on chunk ${chunkNumber}`);
+        return data;
+      };
 
-      if (data.dbEmpty) {
+      const rawLines = csvText.split(/\r?\n/);
+      const headerLine = rawLines[0];
+      const dataLines = rawLines.slice(1).filter(line => line.trim());
+      const responses: any[] = [];
+      for (let start = 0; start < dataLines.length; start += MAX_IMPORT_ROWS_PER_REQUEST) {
+        const chunkLines = dataLines.slice(start, start + MAX_IMPORT_ROWS_PER_REQUEST);
+        responses.push(await postCompareChunk([headerLine, ...chunkLines].join("\n"), Math.floor(start / MAX_IMPORT_ROWS_PER_REQUEST) + 1));
+      }
+      if (responses.length === 0) responses.push(await postCompareChunk(csvText, 1));
+
+      if (responses.some(data => data.dbEmpty)) {
         setDbEmpty(true);
         setRows([]);
         toast({ variant: "destructive", title: "Michigan database not loaded", description: "Go to More → Refresh Data first." });
@@ -447,7 +459,8 @@ useEffect(() => {
       }
 
       setDbEmpty(false);
-      const hydrated: ComparisonRow[] = data.rows.map((r: any) => ({
+      const responseRows = responses.flatMap(data => data.rows || []);
+      const hydrated: ComparisonRow[] = responseRows.map((r: any) => ({
         ...r, resolvedByUser: false, newPrice: r.registerPrice, useCustomName: false, customName: r.name,
       }));
       setRows(hydrated);
