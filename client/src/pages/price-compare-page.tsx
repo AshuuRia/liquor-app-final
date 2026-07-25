@@ -52,6 +52,8 @@ type Filter = "all" | "increased" | "decreased" | "same" | "notfound" | "ambiguo
 type SortKey = "name" | "registerPrice" | "michiganPrice" | "priceDiff" | "newPrice";
 type SortDir = "asc" | "desc";
 
+const MAX_VISIBLE_ROWS = 500;
+
 // ── CSV export helpers ─────────────────────────────────────────────────────────
 
 function buildPtouchCsv(rows: ComparisonRow[], useCustomNames: boolean): string {
@@ -544,7 +546,8 @@ useEffect(() => {
       });
 
   const allRowsWithIdx = rows.map((row, origIdx) => ({ row, origIdx }));
-  const visible = applyFilters(allRowsWithIdx);
+  const filteredRows = applyFilters(allRowsWithIdx);
+  const visible = filteredRows.slice(0, MAX_VISIBLE_ROWS);
 
   // ── Scan mode ─────────────────────────────────────────────────────────────
   const handleBarcodeScan = useCallback((barcode: string) => {
@@ -916,9 +919,14 @@ useEffect(() => {
                       Clear filter
                     </Button>
                   )}
-                  <span className="ml-auto text-xs text-muted-foreground self-center">{visible.length} of {rows.length}</span>
+                  <span className="ml-auto text-xs text-muted-foreground self-center">{filteredRows.length} of {rows.length}</span>
                 </div>
 
+                {filteredRows.length > MAX_VISIBLE_ROWS && (
+                  <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                    Showing the first {MAX_VISIBLE_ROWS} matching products to keep large imports responsive. Search, sort, filter, and exports still use all {filteredRows.length} matching products.
+                  </div>
+                )}
                 <ComparisonTable rowsWithIdx={visible} />
               </>
             )}

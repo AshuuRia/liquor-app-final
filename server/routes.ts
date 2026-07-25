@@ -770,6 +770,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const allLiquorRecords = await storage.getLiquorRecords();
       const recordsByUpc = new Map<string, typeof allLiquorRecords>();
       const recordsByCode = new Map<string, typeof allLiquorRecords>();
+      const toClientMatch = (record: typeof allLiquorRecords[number]) => ({
+        id: record.id,
+        brandName: record.brandName,
+        bottleSize: record.bottleSize,
+        shelfPrice: record.shelfPrice,
+        liquorCode: record.liquorCode,
+      });
       const addToIndex = (index: Map<string, typeof allLiquorRecords>, key: string | null | undefined, record: typeof allLiquorRecords[number]) => {
         if (!key) return;
         const normalized = key.replace(/^0+/, '') || '0';
@@ -836,7 +843,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           matched: !!match,
           matchedBy,
           multipleMatches: matches.length > 1,
-          allMatches: matches.length > 1 ? matches : undefined,
+          allMatches: matches.length > 1 ? matches.map(toClientMatch) : undefined,
           michiganPrice,
           michiganName: match ? `${match.brandName} ${match.bottleSize}` : null,
           michiganBottleSize: match?.bottleSize ?? null,

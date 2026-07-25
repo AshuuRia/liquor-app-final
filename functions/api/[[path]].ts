@@ -620,6 +620,13 @@ app.post('/compare-prices', requireAuth, async (c) => {
     const allLiquorRecords = await storage.getLiquorRecords();
     const recordsByUpc = new Map<string, typeof allLiquorRecords>();
     const recordsByCode = new Map<string, typeof allLiquorRecords>();
+    const toClientMatch = (record: typeof allLiquorRecords[number]) => ({
+      id: record.id,
+      brandName: record.brandName,
+      bottleSize: record.bottleSize,
+      shelfPrice: record.shelfPrice,
+      liquorCode: record.liquorCode,
+    });
     const addToIndex = (index: Map<string, typeof allLiquorRecords>, key: string | null | undefined, record: typeof allLiquorRecords[number]) => {
       if (!key) return;
       const normalized = normalizeUpc(key);
@@ -702,11 +709,11 @@ app.post('/compare-prices', requireAuth, async (c) => {
       rows.push({
         upc: rawUpc, name: rawName, registerPrice, department: dept, liquorCode: sizeCode,
         matched: !!match, matchedBy, multipleMatches: matches.length > 1,
-        allMatches: matches.length > 1 ? matches : undefined,
+        allMatches: matches.length > 1 ? matches.map(toClientMatch) : undefined,
         michiganPrice, michiganName: match ? `${match.brandName} ${match.bottleSize}` : null,
         michiganBottleSize: match?.bottleSize ?? null,
         michiganLiquorCode: match?.liquorCode ?? null,
-        michiganRecord: match ?? null, priceDiff,
+        priceDiff,
       });
     }
 
