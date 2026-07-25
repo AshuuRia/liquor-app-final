@@ -719,7 +719,8 @@ app.post('/compare-prices', requireAuth, async (c) => {
 
     return c.json({ success: true, rows, totalRows: rows.length });
   } catch (err) {
-    return c.json({ success: false, error: 'Failed to compare prices' }, 500);
+    console.error('compare-prices error:', err);
+    return c.json({ success: false, error: `Failed to compare prices: ${err instanceof Error ? err.message : String(err)}` }, 500);
   }
 });
 

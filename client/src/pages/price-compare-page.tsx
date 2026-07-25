@@ -442,8 +442,19 @@ useEffect(() => {
       };
 
       const rawLines = csvText.split(/\r?\n/);
-      const headerLine = rawLines[0];
-      const dataLines = rawLines.slice(1).filter(line => line.trim());
+      const normalizeHeaderLine = (line: string) => line.toLowerCase().replace(/^\uFEFF/, '').replace(/[^a-z0-9,]/g, '');
+      const headerIndex = rawLines.findIndex((line, index) => {
+        if (index > 20) return false;
+        const normalized = normalizeHeaderLine(line);
+        const hasUpc = /(^|,)(upc|barcode|unitupc|upccode)(,|$)/.test(normalized);
+        const hasName = /(^|,)(name|itemname|description|productname)(,|$)/.test(normalized);
+        return hasUpc && hasName;
+      });
+      if (headerIndex === -1) {
+        throw new Error("CSV missing UPC/barcode or product name columns. Make sure you're uploading the register/P-touch CSV export.");
+      }
+      const headerLine = rawLines[headerIndex];
+      const dataLines = rawLines.slice(headerIndex + 1).filter(line => line.trim());
       const responses: any[] = [];
       for (let start = 0; start < dataLines.length; start += MAX_IMPORT_ROWS_PER_REQUEST) {
         const chunkLines = dataLines.slice(start, start + MAX_IMPORT_ROWS_PER_REQUEST);

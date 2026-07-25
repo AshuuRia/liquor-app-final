@@ -794,17 +794,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const lines = csvText.split(/\r?\n/).filter((l: string) => l.trim());
       if (lines.length < 2) return res.status(400).json({ success: false, error: "CSV appears empty" });
 
-      const header = parseCsvLine(lines[0]).map((h: string) => h.toLowerCase().trim());
-      const col = (name: string) => header.indexOf(name);
-      const upcIdx   = col('upc');
-      const nameIdx  = col('name');
-      const priceIdx = col('price');
-      const centsIdx = col('cents');
-      const deptIdx  = col('department');
-      const sizeIdx  = col('size');
+      const normalizeHeader = (h: string) => h.toLowerCase().replace(/^\uFEFF/, '').replace(/[^a-z0-9]/g, '');
+      const header = parseCsvLine(lines[0]).map(normalizeHeader);
+      const col = (...names: string[]) => {
+        const normalized = names.map(normalizeHeader);
+        for (const name of normalized) {
+          const exact = header.indexOf(name);
+          if (exact !== -1) return exact;
+        }
+        return header.findIndex((h: string) => normalized.some((name) => h.includes(name)));
+      };
+      const upcIdx = col('upc', 'upc code', 'barcode', 'unit upc'),
+            nameIdx = col('name', 'item name', 'description', 'product name'),
+            priceIdx = col('price', 'retail price', 'selling price'),
+            centsIdx = col('cents', 'price cents'),
+            deptIdx = col('department', 'dept'),
+            sizeIdx = col('size', 'liquor code');
 
       if (upcIdx === -1 || nameIdx === -1) {
-        return res.status(400).json({ success: false, error: "CSV missing required Upc or Name columns. Make sure you're uploading a P-touch CSV export." });
+        return res.status(400).json({ success: false, error: "CSV missing required UPC/barcode or product name columns. Make sure you're uploading a register/P-touch CSV export." });
       }
 
       const rows = [];
