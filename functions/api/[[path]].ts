@@ -607,12 +607,32 @@ app.get('/custom-names', requireAuth, async (c) => {
 
 app.post('/compare-prices', requireAuth, async (c) => {
   try {
-    const { csvText } = await c.req.json<{ csvText: string }>();
+    const contentType = c.req.header('content-type') || '';
+    const csvText = contentType.includes('application/json')
+      ? (await c.req.json<{ csvText: string }>()).csvText
+      : await c.req.text();
     if (!csvText) return c.json({ success: false, error: 'No CSV provided' }, 400);
     const storage = db(c);
 
     const dbCount = await storage.getLiquorRecordCount();
     if (!dbCount) return c.json({ success: true, rows: [], totalRows: 0, dbEmpty: true });
+
+    const allLiquorRecords = await storage.getLiquorRecords();
+    const recordsByUpc = new Map<string, typeof allLiquorRecords>();
+    const recordsByCode = new Map<string, typeof allLiquorRecords>();
+    const addToIndex = (index: Map<string, typeof allLiquorRecords>, key: string | null | undefined, record: typeof allLiquorRecords[number]) => {
+      if (!key) return;
+      const normalized = normalizeUpc(key);
+      if (!normalized || normalized === '0') return;
+      const matches = index.get(normalized);
+      if (matches) matches.push(record);
+      else index.set(normalized, [record]);
+    };
+    for (const record of allLiquorRecords) {
+      addToIndex(recordsByUpc, record.upcCode1, record);
+      addToIndex(recordsByUpc, record.upcCode2, record);
+      addToIndex(recordsByCode, record.liquorCode, record);
+    }
 
     function parseCsvLine(line: string): string[] {
       const fields: string[] = [];
@@ -668,10 +688,10 @@ app.post('/compare-prices', requireAuth, async (c) => {
       if (rawCents) registerPrice = parseInt(rawCents.replace(/[^0-9-]/g, ''), 10) / 100;
       else if (rawPrice) registerPrice = parseFloat(rawPrice.replace(/[^0-9.]/g, '')) || 0;
 
-      let matches = await storage.findAllLiquorByBarcode(rawUpc);
+      let matches = recordsByUpc.get(normalizeUpc(rawUpc)) || [];
       let matchedBy: 'upc' | 'code' | null = matches.length ? 'upc' : null;
       if (!matches.length && sizeCode) {
-        matches = await storage.findAllLiquorByCode(sizeCode);
+        matches = recordsByCode.get(normalizeUpc(sizeCode)) || [];
         if (matches.length) matchedBy = 'code';
       }
 

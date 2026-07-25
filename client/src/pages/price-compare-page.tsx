@@ -426,9 +426,9 @@ useEffect(() => {
       const authHeaders = await getAuthHeaders();
       const res = await fetch("/api/compare-prices", {
         method: "POST",
-        headers: { "Content-Type": "application/json", ...authHeaders },
+        headers: { "Content-Type": "text/csv;charset=utf-8", ...authHeaders },
         credentials: "include",
-        body: JSON.stringify({ csvText }),
+        body: csvText,
       });
       const data = await res.json().catch(() => null);
       if (!res.ok) {

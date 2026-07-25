@@ -48,6 +48,10 @@ export class D1Storage {
     await this.db.delete(schema.liquorRecords);
   }
 
+  async getLiquorRecords(): Promise<any[]> {
+    return this.db.select().from(schema.liquorRecords);
+  }
+
   async getLiquorRecordById(id: string): Promise<any | undefined> {
     const r = await this.db.select().from(schema.liquorRecords)
       .where(eq(schema.liquorRecords.id, id)).limit(1);
