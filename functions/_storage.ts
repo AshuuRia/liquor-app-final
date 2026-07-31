@@ -48,6 +48,26 @@ export class D1Storage {
     await this.db.delete(schema.liquorRecords);
   }
 
+  async bulkUpdateLiquorRecordPrices(records: Array<{ liquorCode: string; onPremisePrice: number | string | null; offPremisePrice: number | string | null; shelfPrice: number | string | null }>): Promise<void> {
+    const CHUNK = 50;
+    for (let i = 0; i < records.length; i += CHUNK) {
+      const chunk = records.slice(i, i + CHUNK);
+      await this.db.batch(
+        chunk.map((record) => {
+          const norm = normalizeUpc(record.liquorCode);
+          if (!norm || norm === '0') return null;
+          return this.db.update(schema.liquorRecords)
+            .set({
+              onPremisePrice: record.onPremisePrice === null ? null : Number(record.onPremisePrice),
+              offPremisePrice: record.offPremisePrice === null ? null : Number(record.offPremisePrice),
+              shelfPrice: record.shelfPrice === null ? null : Number(record.shelfPrice),
+            })
+            .where(sql`ltrim(${schema.liquorRecords.liquorCode}, '0') = ${norm}`);
+        }).filter(Boolean) as any
+      );
+    }
+  }
+
   async getLiquorRecords(): Promise<any[]> {
     return this.db.select().from(schema.liquorRecords);
   }

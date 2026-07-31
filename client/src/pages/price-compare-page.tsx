@@ -556,6 +556,37 @@ useEffect(() => {
     toast({ title: "Match applied", description: `Linked to ${match.brandName} ${match.bottleSize}` });
   };
 
+  const openPickMatch = async (origIdx: number, row: ComparisonRow) => {
+    if (row.allMatches?.length) {
+      setDisambigRow({ origIdx, row });
+      return;
+    }
+
+    const lookup = row.upc || row.michiganLiquorCode || row.liquorCode || row.name;
+    if (!lookup) {
+      toast({ variant: "destructive", title: "No match options", description: "This row does not have a UPC, liquor code, or name to look up." });
+      return;
+    }
+
+    try {
+      const res = await fetch(`/api/search-liquor?query=${encodeURIComponent(lookup)}`, { credentials: "include" });
+      const data = await res.json().catch(() => null);
+      if (!res.ok || !data?.success) throw new Error(data?.error || "Could not load match options.");
+
+      const matches = (data.results || []) as LiquorRecord[];
+      if (matches.length === 0) {
+        toast({ variant: "destructive", title: "No match options", description: `No Michigan price book records were found for ${lookup}.` });
+        return;
+      }
+
+      const hydratedRow = { ...row, allMatches: matches, multipleMatches: matches.length > 1 };
+      updateRow(origIdx, { allMatches: matches, multipleMatches: matches.length > 1 });
+      setDisambigRow({ origIdx, row: hydratedRow });
+    } catch (err: any) {
+      toast({ variant: "destructive", title: "Could not load match options", description: err?.message || "Try refreshing the Michigan data and uploading the CSV again." });
+    }
+  };
+
   // ── Sorting ───────────────────────────────────────────────────────────────
   const toggleSort = (key: SortKey) => {
     if (sortKey === key) setSortDir(d => d === "asc" ? "desc" : "asc");
@@ -784,7 +815,7 @@ useEffect(() => {
                   </td>
                   <td className="px-3 py-2.5">
                     {needsReview
-                      ? <Badge className="text-xs bg-orange-100 text-orange-700 border-orange-200 hover:bg-orange-100 cursor-pointer" onClick={() => setDisambigRow({ origIdx, row })}>Pick match</Badge>
+                      ? <Badge className="text-xs bg-orange-100 text-orange-700 border-orange-200 hover:bg-orange-100 cursor-pointer" onClick={() => openPickMatch(origIdx, row)}>Pick match</Badge>
                       : <DiffBadge diff={row.priceDiff} />
                     }
                   </td>
@@ -1190,6 +1221,11 @@ useEffect(() => {
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-2 max-h-[60vh] overflow-y-auto pr-1">
+            {!disambigRow?.row.allMatches?.length && (
+              <div className="rounded-lg border border-dashed border-border px-4 py-6 text-center text-sm text-muted-foreground">
+                No match options are loaded for this row. Close this dialog and click Pick match again, or refresh the Michigan data and re-import the CSV.
+              </div>
+            )}
             {disambigRow?.row.allMatches?.map((match, i) => {
               const miPrice = match.shelfPrice ?? null;
               const diff    = miPrice !== null ? Math.round((miPrice - disambigRow.row.registerPrice) * 100) / 100 : null;
