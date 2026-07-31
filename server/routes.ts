@@ -110,6 +110,149 @@ function toBottleBarcode(barcode: string): string {
   return barcode;
 }
 
+
+type ParsedTsvRecord = ReturnType<typeof parseTsvLine>;
+
+type ExcelImportResult = {
+  records: ParsedTsvRecord[];
+  changes: Array<{ liquorCode: string; newChng: string | null }>;
+  totalRecords: number;
+  uniqueBrands: number;
+  uniqueVendors: number;
+  avgPrice: number;
+  newProducts: number;
+  priceChanges: number;
+};
+
+const PRICE_BOOK_EXCEL_URL = 'https://www.michigan.gov/lara/-/media/Project/Websites/lara/lcc/Price-Book/5-3-26-PRICE-BOOK-Excel.xlsx?rev=6a054889b3c3465a88a3ae2656a6733b&hash=95B952FA318836F5B90F5E2F90EB3E65';
+const PRICE_BOOK_TXT_URL = 'https://www.michigan.gov/lara/-/media/Project/Websites/lara/lcc/Price-Book/May-2-2026-Price-Book-TXT.txt?rev=0c6b278ff50242b7917b090cc9f6bbc2&hash=CDD79D3A69C5876AEA62FF8E0756ADEA';
+
+function normalizeHeaderValue(value: unknown): string {
+  return String(value ?? '').toLowerCase().trim().replace(/[^a-z0-9]/g, '');
+}
+
+function findHeaderIndex(headers: string[], ...candidates: string[]): number {
+  const normalizedCandidates = candidates.map(normalizeHeaderValue);
+  for (const candidate of normalizedCandidates) {
+    const exact = headers.indexOf(candidate);
+    if (exact !== -1) return exact;
+  }
+  return headers.findIndex((header) => normalizedCandidates.some((candidate) => header.includes(candidate)));
+}
+
+function parsePriceBookTxt(content: string): ParsedTsvRecord[] {
+  const allLines = content.split('\n').filter((line: string) => line.trim());
+  const lines = allLines[0]?.toLowerCase().includes('liquor code') ? allLines.slice(1) : allLines;
+  return lines.map(parseTsvLine).filter((record) => record.liquorCode);
+}
+
+function buildTxtRecordMap(txtRecords: ParsedTsvRecord[]): Map<string, ParsedTsvRecord> {
+  const map = new Map<string, ParsedTsvRecord>();
+  for (const record of txtRecords) {
+    if (!record.liquorCode) continue;
+    map.set(record.liquorCode.replace(/^0+/, '') || '0', record);
+  }
+  return map;
+}
+
+function parseNewChng(rawChng: unknown): string | null {
+  if (rawChng === null || rawChng === undefined || rawChng === '') return null;
+  if (typeof rawChng === 'number') return rawChng !== 0 ? rawChng.toString() : null;
+  const str = String(rawChng).trim();
+  if (!str) return null;
+  if (str.toLowerCase() === 'new') return 'new';
+  const num = parseFloat(str.replace(/[$,]/g, ''));
+  return !isNaN(num) && num !== 0 ? num.toString() : null;
+}
+
+function parseExcelPriceBook(buffer: ArrayBuffer | Buffer, txtRecordMap = new Map<string, ParsedTsvRecord>()): ExcelImportResult {
+  const workbook = XLSX.read(Buffer.from(buffer), { type: 'buffer' });
+  const sheet = workbook.Sheets[workbook.SheetNames[0]];
+  const rows: any[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null });
+  if (!rows.length) throw new Error('Empty Excel file');
+
+  const headers = rows[0].map(normalizeHeaderValue);
+  const liquorCodeIdx = findHeaderIndex(headers, 'liqour code', 'liquor code');
+  const brandIdx = findHeaderIndex(headers, 'brand name final', 'brand name');
+  const adaIdx = findHeaderIndex(headers, 'ada #', 'ada number');
+  const proofIdx = findHeaderIndex(headers, 'proof');
+  const bottleSizeIdx = findHeaderIndex(headers, 'bottle size');
+  const packSizeIdx = findHeaderIndex(headers, 'case size', 'pack size');
+  const basePriceIdx = findHeaderIndex(headers, 'base price', 'on premise');
+  const licenseePriceIdx = findHeaderIndex(headers, 'licensee price', 'off premise');
+  const shelfPriceIdx = findHeaderIndex(headers, 'minimum shelf price', 'shelf price');
+  const newChngIdx = findHeaderIndex(headers, 'new/chng', 'new chng', 'chng');
+
+  if (liquorCodeIdx === -1) throw new Error(`Could not find liquor code column. Headers: ${rows[0].join(', ')}`);
+  if (brandIdx === -1) throw new Error(`Could not find brand name column. Headers: ${rows[0].join(', ')}`);
+  if (shelfPriceIdx === -1) throw new Error(`Could not find current shelf price column. Headers: ${rows[0].join(', ')}`);
+
+  const records: ParsedTsvRecord[] = [];
+  const changes: Array<{ liquorCode: string; newChng: string | null }> = [];
+  const brands = new Set<string>();
+  const vendors = new Set<string>();
+  const prices: number[] = [];
+
+  for (let i = 1; i < rows.length; i++) {
+    const row = rows[i];
+    if (!row) continue;
+    const liquorCode = String(row[liquorCodeIdx] ?? '').trim();
+    if (!liquorCode) continue;
+    const txtRecord = txtRecordMap.get(liquorCode.replace(/^0+/, '') || '0');
+    const record: ParsedTsvRecord = {
+      liquorCode,
+      brandName: String(row[brandIdx] ?? txtRecord?.brandName ?? '').trim(),
+      adaNumber: String(adaIdx >= 0 ? row[adaIdx] ?? '' : txtRecord?.adaNumber ?? '').trim(),
+      adaName: txtRecord?.adaName ?? '',
+      vendorName: txtRecord?.vendorName ?? '',
+      proof: String(proofIdx >= 0 ? row[proofIdx] ?? '' : txtRecord?.proof ?? '').trim(),
+      bottleSize: String(bottleSizeIdx >= 0 ? row[bottleSizeIdx] ?? '' : txtRecord?.bottleSize ?? '').trim(),
+      packSize: String(packSizeIdx >= 0 ? row[packSizeIdx] ?? '' : txtRecord?.packSize ?? '').trim(),
+      onPremisePrice: parsePrice(String(basePriceIdx >= 0 ? row[basePriceIdx] ?? '' : '')),
+      offPremisePrice: parsePrice(String(licenseePriceIdx >= 0 ? row[licenseePriceIdx] ?? '' : '')),
+      shelfPrice: parsePrice(String(row[shelfPriceIdx] ?? '')),
+      upcCode1: txtRecord?.upcCode1 ?? '',
+      upcCode2: txtRecord?.upcCode2 ?? '',
+      effectiveDate: txtRecord?.effectiveDate ?? '',
+    };
+    records.push(record);
+    if (record.brandName) brands.add(record.brandName);
+    if (record.vendorName) vendors.add(record.vendorName);
+    if (typeof record.shelfPrice === 'number') prices.push(record.shelfPrice);
+
+    const newChng = newChngIdx >= 0 ? parseNewChng(row[newChngIdx]) : null;
+    if (newChng !== null) changes.push({ liquorCode, newChng });
+  }
+
+  const avgPrice = prices.length > 0 ? prices.reduce((sum, price) => sum + price, 0) / prices.length : 0;
+  return {
+    records,
+    changes,
+    totalRecords: records.length,
+    uniqueBrands: brands.size,
+    uniqueVendors: vendors.size,
+    avgPrice: Number(avgPrice.toFixed(2)),
+    newProducts: changes.filter(c => c.newChng === 'new').length,
+    priceChanges: changes.filter(c => c.newChng !== null && c.newChng !== 'new').length,
+  };
+}
+
+async function loadLocalOrRemoteExcel(): Promise<ArrayBuffer> {
+  const localFilePath = new URL("../client/public/data/price-book.xlsx", import.meta.url);
+  try {
+    const fs = await import("node:fs/promises");
+    const localFile = await fs.readFile(localFilePath);
+    return localFile.buffer.slice(localFile.byteOffset, localFile.byteOffset + localFile.byteLength);
+  } catch {
+    const response = await fetch(PRICE_BOOK_EXCEL_URL, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
+      signal: AbortSignal.timeout(120000),
+    });
+    if (!response.ok) throw new Error(`Failed to download Excel: ${response.status} ${response.statusText}`);
+    return response.arrayBuffer();
+  }
+}
+
 // ── CSV parser for compare-prices ─────────────────────────────────────────────
 
 
@@ -170,53 +313,16 @@ function getUserId(req: any): string {
 // ── Internal: fetch price changes from Michigan Excel ─────────────────────────
 
 async function fetchPriceChangesInternal(): Promise<{ success: boolean; totalChanges: number; newProducts: number; priceChanges: number; error?: string }> {
-  const excelUrl = 'https://www.michigan.gov/lara/-/media/Project/Websites/lara/lcc/Price-Book/5-3-26-PRICE-BOOK-Excel.xlsx?rev=6a054889b3c3465a88a3ae2656a6733b&hash=95B952FA318836F5B90F5E2F90EB3E65';
   try {
-    const response = await fetch(excelUrl, {
-      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
-      signal: AbortSignal.timeout(120000),
-    });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const buffer = await response.arrayBuffer();
-    const workbook = XLSX.read(Buffer.from(buffer), { type: 'buffer' });
-    const sheet = workbook.Sheets[workbook.SheetNames[0]];
-    const rows: any[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null });
-    if (!rows.length) throw new Error('Empty Excel file');
-    const headerRow = rows[0].map((h: any) => String(h ?? '').toLowerCase().trim());
-    let liquorCodeIdx = headerRow.findIndex((h: string) => h === 'liqour code');
-    if (liquorCodeIdx === -1) liquorCodeIdx = headerRow.findIndex((h: string) => h === 'liquor code');
-    if (liquorCodeIdx === -1) liquorCodeIdx = headerRow.findIndex((h: string) => h.includes('liq') && h.includes('code'));
-    let newChngIdx = headerRow.findIndex((h: string) => h === 'new/chng');
-    if (newChngIdx === -1) newChngIdx = headerRow.findIndex((h: string) => h.includes('new') && h.includes('chng'));
-    if (newChngIdx === -1) newChngIdx = headerRow.findIndex((h: string) => h.includes('chng'));
-    if (liquorCodeIdx === -1 || newChngIdx === -1) throw new Error('Could not find required columns');
-    const changes: Array<{ liquorCode: string; newChng: string | null }> = [];
-    for (let i = 1; i < rows.length; i++) {
-      const row = rows[i];
-      if (!row) continue;
-      const rawCode = row[liquorCodeIdx];
-      if (rawCode === null || rawCode === undefined || rawCode === '') continue;
-      const liquorCode = String(rawCode).trim();
-      if (!liquorCode) continue;
-      const rawChng = row[newChngIdx];
-      let newChng: string | null = null;
-      if (rawChng !== null && rawChng !== undefined && rawChng !== '') {
-        if (typeof rawChng === 'number') { if (rawChng !== 0) newChng = rawChng.toString(); }
-        else {
-          const str = String(rawChng).trim();
-          if (str.toLowerCase() === 'new') { newChng = 'new'; }
-          else { const num = parseFloat(str); if (!isNaN(num) && num !== 0) newChng = num.toString(); }
-        }
-      }
-      if (newChng !== null) changes.push({ liquorCode, newChng });
-    }
+    const buffer = await loadLocalOrRemoteExcel();
+    const result = parseExcelPriceBook(buffer);
     await storage.clearPriceBookChanges();
-    await storage.bulkUpsertPriceChanges(changes);
+    await storage.bulkUpsertPriceChanges(result.changes);
     return {
       success: true,
-      totalChanges: changes.length,
-      newProducts: changes.filter(c => c.newChng === 'new').length,
-      priceChanges: changes.filter(c => c.newChng !== null && c.newChng !== 'new').length,
+      totalChanges: result.changes.length,
+      newProducts: result.newProducts,
+      priceChanges: result.priceChanges,
     };
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Unknown error';
@@ -224,6 +330,7 @@ async function fetchPriceChangesInternal(): Promise<{ success: boolean; totalCha
     return { success: false, totalChanges: 0, newProducts: 0, priceChanges: 0, error: msg };
   }
 }
+
 
 export async function registerRoutes(app: Express): Promise<Server> {
 
@@ -258,74 +365,67 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       if (!req.file) return res.status(400).json({ success: false, error: "No file uploaded" });
       const fileContent = req.file.buffer.toString('utf-8');
-      const lines = fileContent.split('\n').filter(line => line.trim());
-      const records = [];
-      const brands = new Set<string>();
-      const vendors = new Set<string>();
-      const prices: number[] = [];
-      for (const line of lines) {
-        const record = parseTsvLine(line);
-        if (!record.liquorCode) continue;
-        records.push(record);
-        if (record.brandName) brands.add(record.brandName);
-        if (record.vendorName) vendors.add(record.vendorName);
-        if (typeof record.shelfPrice === 'number') prices.push(record.shelfPrice);
-      }
-      const avgPrice = prices.length > 0 ? prices.reduce((s, p) => s + p, 0) / prices.length : 0;
+      const txtRecords = parsePriceBookTxt(fileContent);
+      const excelBuffer = await loadLocalOrRemoteExcel();
+      const result = parseExcelPriceBook(excelBuffer, buildTxtRecordMap(txtRecords));
       await storage.clearLiquorRecords();
-      await storage.bulkCreateLiquorRecords(records);
-      res.json({ success: true, totalRecords: records.length, uniqueBrands: brands.size, uniqueVendors: vendors.size, avgPrice: Number(avgPrice.toFixed(2)), records: records.slice(0, 100) });
+      await storage.bulkCreateLiquorRecords(result.records);
+      await storage.clearPriceBookChanges();
+      await storage.bulkUpsertPriceChanges(result.changes);
+      res.json({
+        success: true,
+        totalRecords: result.totalRecords,
+        uniqueBrands: result.uniqueBrands,
+        uniqueVendors: result.uniqueVendors,
+        avgPrice: result.avgPrice,
+        priceChanges: {
+          success: true,
+          totalChanges: result.changes.length,
+          newProducts: result.newProducts,
+          priceChanges: result.priceChanges,
+        },
+        records: result.records.slice(0, 100),
+      });
     } catch (error) {
-      if (!res.headersSent) res.status(500).json({ success: false, error: "Failed to process file" });
+      if (!res.headersSent) res.status(500).json({ success: false, error: "Failed to process file", details: error instanceof Error ? error.message : "Unknown error" });
     }
   });
 
   app.post("/api/fetch-liquor-data", async (req, res) => {
-    console.log('Fetching liquor data from Michigan state website...');
+    console.log('Fetching Michigan TXT barcodes and Excel prices...');
     try {
-      const michiganUrl = 'https://www.michigan.gov/lara/-/media/Project/Websites/lara/lcc/Price-Book/May-2-2026-Price-Book-TXT.txt?rev=0c6b278ff50242b7917b090cc9f6bbc2&hash=CDD79D3A69C5876AEA62FF8E0756ADEA';
-      console.log('Downloading from:', michiganUrl);
-      const response = await fetch(michiganUrl, {
+      console.log('Downloading barcode TXT from:', PRICE_BOOK_TXT_URL);
+      const txtResponse = await fetch(PRICE_BOOK_TXT_URL, {
         headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
         signal: AbortSignal.timeout(120000),
       });
-      if (!response.ok) throw new Error(`Failed to download: ${response.status} ${response.statusText}`);
-      const fileContent = await response.text();
-      console.log('Downloaded content, length:', fileContent.length);
-      const allLines = fileContent.split('\n').filter((line: string) => line.trim());
-      const lines = allLines[0]?.toLowerCase().includes('liquor code') ? allLines.slice(1) : allLines;
-      console.log('File parsed, data lines:', lines.length);
-      const records = [];
-      const brands = new Set<string>();
-      const vendors = new Set<string>();
-      const prices: number[] = [];
-      for (const line of lines) {
-        const record = parseTsvLine(line);
-        if (!record.liquorCode) continue;
-        records.push(record);
-        if (record.brandName) brands.add(record.brandName);
-        if (record.vendorName) vendors.add(record.vendorName);
-        if (typeof record.shelfPrice === 'number') prices.push(record.shelfPrice);
-      }
-      const avgPrice = prices.length > 0 ? prices.reduce((s, p) => s + p, 0) / prices.length : 0;
+      if (!txtResponse.ok) throw new Error(`Failed to download TXT: ${txtResponse.status} ${txtResponse.statusText}`);
+      const txtContent = await txtResponse.text();
+      const txtRecords = parsePriceBookTxt(txtContent);
+      console.log('TXT parsed for barcodes, data lines:', txtRecords.length);
+
+      const excelBuffer = await loadLocalOrRemoteExcel();
+      const result = parseExcelPriceBook(excelBuffer, buildTxtRecordMap(txtRecords));
       await storage.clearLiquorRecords();
       console.log('Cleared existing liquor records');
-      await storage.bulkCreateLiquorRecords(records);
-      console.log(`Saved ${records.length} liquor records to storage`);
+      await storage.bulkCreateLiquorRecords(result.records);
+      console.log(`Saved ${result.records.length} Excel-priced liquor records with TXT barcodes to storage`);
+      await storage.clearPriceBookChanges();
+      await storage.bulkUpsertPriceChanges(result.changes);
+      console.log(`Saved ${result.changes.length} Excel price changes to storage`);
 
-      // Auto-fetch price changes from Excel after loading TXT data
-      console.log('Auto-fetching price changes from Michigan Excel...');
-      const priceChangeResult = await fetchPriceChangesInternal();
-      console.log('Price changes result:', priceChangeResult);
-
-      console.log('Data fetch and processing complete:', records.length, 'records processed');
       res.json({
         success: true,
-        totalRecords: records.length,
-        uniqueBrands: brands.size,
-        uniqueVendors: vendors.size,
-        avgPrice: Number(avgPrice.toFixed(2)),
-        priceChanges: priceChangeResult,
+        totalRecords: result.totalRecords,
+        uniqueBrands: result.uniqueBrands,
+        uniqueVendors: result.uniqueVendors,
+        avgPrice: result.avgPrice,
+        priceChanges: {
+          success: true,
+          totalChanges: result.changes.length,
+          newProducts: result.newProducts,
+          priceChanges: result.priceChanges,
+        },
       });
     } catch (error) {
       console.error("Data fetch error:", error);
@@ -353,87 +453,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.post("/api/fetch-price-changes", async (req, res) => {
     console.log('Fetching price change data from Michigan state Excel...');
-    try {
-      const excelUrl = 'https://www.michigan.gov/lara/-/media/Project/Websites/lara/lcc/Price-Book/5-3-26-PRICE-BOOK-Excel.xlsx?rev=6a054889b3c3465a88a3ae2656a6733b&hash=95B952FA318836F5B90F5E2F90EB3E65';
-      const localFilePath = new URL("../client/public/data/price-book.xlsx", import.meta.url);
-
-      let buffer: ArrayBuffer;
-      try {
-        const fs = await import("node:fs/promises");
-        const localFile = await fs.readFile(localFilePath);
-        buffer = localFile.buffer.slice(localFile.byteOffset, localFile.byteOffset + localFile.byteLength);
-      } catch {
-        const response = await fetch(excelUrl, {
-          headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
-          signal: AbortSignal.timeout(120000),
-        });
-        if (!response.ok) throw new Error(`Failed to download Excel: ${response.status} ${response.statusText}`);
-        buffer = await response.arrayBuffer();
-      }
-      const workbook = XLSX.read(Buffer.from(buffer), { type: 'buffer' });
-      const sheet = workbook.Sheets[workbook.SheetNames[0]];
-      const rows: any[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null });
-
-      if (!rows.length) throw new Error('Empty Excel file');
-
-      // Find header row and column indices
-      const headerRow = rows[0].map((h: any) => String(h ?? '').toLowerCase().trim());
-
-      // Find liquor code column — handle "liqour code" typo and "liquor code" as fallback
-      let liquorCodeIdx = headerRow.findIndex((h: string) => h === 'liqour code');
-      if (liquorCodeIdx === -1) liquorCodeIdx = headerRow.findIndex((h: string) => h === 'liquor code');
-      if (liquorCodeIdx === -1) liquorCodeIdx = headerRow.findIndex((h: string) => h.includes('liq') && h.includes('code'));
-
-      // Find new/chng column
-      let newChngIdx = headerRow.findIndex((h: string) => h === 'new/chng');
-      if (newChngIdx === -1) newChngIdx = headerRow.findIndex((h: string) => h.includes('new') && h.includes('chng'));
-      if (newChngIdx === -1) newChngIdx = headerRow.findIndex((h: string) => h.includes('chng'));
-
-      if (liquorCodeIdx === -1) throw new Error(`Could not find liquor code column. Headers: ${headerRow.join(', ')}`);
-      if (newChngIdx === -1) throw new Error(`Could not find NEW/CHNG column. Headers: ${headerRow.join(', ')}`);
-
-      const changes: Array<{ liquorCode: string; newChng: string | null }> = [];
-
-      for (let i = 1; i < rows.length; i++) {
-        const row = rows[i];
-        if (!row) continue;
-        const rawCode = row[liquorCodeIdx];
-        if (rawCode === null || rawCode === undefined || rawCode === '') continue;
-        const liquorCode = String(rawCode).trim();
-        if (!liquorCode) continue;
-
-        const rawChng = row[newChngIdx];
-        let newChng: string | null = null;
-
-        if (rawChng !== null && rawChng !== undefined && rawChng !== '') {
-          if (typeof rawChng === 'number') {
-            if (rawChng !== 0) newChng = rawChng.toString();
-          } else {
-            const str = String(rawChng).trim();
-            if (str.toLowerCase() === 'new') {
-              newChng = 'new';
-            } else {
-              const num = parseFloat(str);
-              if (!isNaN(num) && num !== 0) newChng = num.toString();
-            }
-          }
-        }
-
-        // Only store rows with actual changes
-        if (newChng !== null) changes.push({ liquorCode, newChng });
-      }
-
-      await storage.clearPriceBookChanges();
-      await storage.bulkUpsertPriceChanges(changes);
-
-      const newCount = changes.filter(c => c.newChng === 'new').length;
-      const changedCount = changes.filter(c => c.newChng !== null && c.newChng !== 'new').length;
-
-      console.log(`Price changes loaded: ${newCount} new, ${changedCount} price changes`);
-      res.json({ success: true, totalChanges: changes.length, newProducts: newCount, priceChanges: changedCount });
-    } catch (error) {
-      console.error("Price changes fetch error:", error);
-      if (!res.headersSent) res.status(500).json({ success: false, error: "Failed to fetch price changes", details: error instanceof Error ? error.message : "Unknown error" });
+    const result = await fetchPriceChangesInternal();
+    if (result.success) {
+      res.json(result);
+    } else {
+      res.status(500).json({ success: false, error: "Failed to fetch price changes", details: result.error });
     }
   });
 
