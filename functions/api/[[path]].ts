@@ -400,6 +400,7 @@ app.post('/fetch-price-changes', async (c) => {
     const storage = db(c);
     await storage.clearPriceBookChanges();
     await storage.bulkUpsertPriceChanges(result.changes);
+    await storage.bulkUpdateLiquorRecordPrices(result.records);
     return c.json({
       success: true,
       source,

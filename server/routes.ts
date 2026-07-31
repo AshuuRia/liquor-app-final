@@ -318,6 +318,7 @@ async function fetchPriceChangesInternal(): Promise<{ success: boolean; totalCha
     const result = parseExcelPriceBook(buffer);
     await storage.clearPriceBookChanges();
     await storage.bulkUpsertPriceChanges(result.changes);
+    await storage.bulkUpdateLiquorRecordPrices(result.records);
     return {
       success: true,
       totalChanges: result.changes.length,
