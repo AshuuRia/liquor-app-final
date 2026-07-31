@@ -38,6 +38,7 @@ interface ComparisonRow {
   newPrice: number;
   useCustomName: boolean;
   customName: string;
+  priceBookOnly?: boolean;
 }
 
 interface SessionMeta {
@@ -51,6 +52,36 @@ type PageMode = "csv" | "scan";
 type Filter = "all" | "increased" | "decreased" | "same" | "notfound" | "ambiguous";
 type SortKey = "name" | "registerPrice" | "michiganPrice" | "priceDiff" | "newPrice";
 type SortDir = "asc" | "desc";
+
+const MAX_VISIBLE_ROWS = 500;
+const MAX_IMPORT_ROWS_PER_REQUEST = 500;
+
+function splitCsvRecords(csvText: string): string[] {
+  const records: string[] = [];
+  let current = "";
+  let inQuotes = false;
+
+  for (let i = 0; i < csvText.length; i++) {
+    const ch = csvText[i];
+    if (ch === '"') {
+      current += ch;
+      if (inQuotes && csvText[i + 1] === '"') {
+        current += csvText[++i];
+      } else {
+        inQuotes = !inQuotes;
+      }
+    } else if ((ch === "\n" || ch === "\r") && !inQuotes) {
+      if (ch === "\r" && csvText[i + 1] === "\n") i++;
+      records.push(current);
+      current = "";
+    } else {
+      current += ch;
+    }
+  }
+
+  if (current || csvText.endsWith("\n") || csvText.endsWith("\r")) records.push(current);
+  return records;
+}
 
 // ── CSV export helpers ─────────────────────────────────────────────────────────
 
@@ -424,20 +455,42 @@ useEffect(() => {
     try {
       const csvText = await file.text();
       const authHeaders = await getAuthHeaders();
-      const res = await fetch("/api/compare-prices", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", ...authHeaders },
-        credentials: "include",
-        body: JSON.stringify({ csvText }),
-      });
-      const data = await res.json().catch(() => null);
-      if (!res.ok) {
-        throw new Error(data?.error || `Upload failed (${res.status})`);
-      }
-      if (!data) throw new Error("Upload failed: server returned an invalid response.");
-      if (!data.success) throw new Error(data.error || "Unknown error");
+      const postCompareChunk = async (chunkCsv: string, chunkNumber: number) => {
+        const res = await fetch("/api/compare-prices", {
+          method: "POST",
+          headers: { "Content-Type": "text/csv;charset=utf-8", ...authHeaders },
+          credentials: "include",
+          body: chunkCsv,
+        });
+        const data = await res.json().catch(() => null);
+        if (!res.ok) throw new Error(data?.error || `Upload failed on chunk ${chunkNumber} (${res.status})`);
+        if (!data) throw new Error(`Upload failed on chunk ${chunkNumber}: server returned an invalid response.`);
+        if (!data.success) throw new Error(data.error || `Upload failed on chunk ${chunkNumber}`);
+        return data;
+      };
 
-      if (data.dbEmpty) {
+      const rawLines = splitCsvRecords(csvText);
+      const normalizeHeaderLine = (line: string) => line.toLowerCase().replace(/^\uFEFF/, '').replace(/[^a-z0-9,]/g, '');
+      const headerIndex = rawLines.findIndex((line, index) => {
+        if (index > 20) return false;
+        const normalized = normalizeHeaderLine(line);
+        const hasUpc = /(^|,)(upc|barcode|unitupc|upccode)(,|$)/.test(normalized);
+        const hasName = /(^|,)(name|itemname|description|productname)(,|$)/.test(normalized);
+        return hasUpc && hasName;
+      });
+      if (headerIndex === -1) {
+        throw new Error("CSV missing UPC/barcode or product name columns. Make sure you're uploading the register/P-touch CSV export.");
+      }
+      const headerLine = rawLines[headerIndex];
+      const dataLines = rawLines.slice(headerIndex + 1).filter(line => line.trim());
+      const responses: any[] = [];
+      for (let start = 0; start < dataLines.length; start += MAX_IMPORT_ROWS_PER_REQUEST) {
+        const chunkLines = dataLines.slice(start, start + MAX_IMPORT_ROWS_PER_REQUEST);
+        responses.push(await postCompareChunk([headerLine, ...chunkLines].join("\n"), Math.floor(start / MAX_IMPORT_ROWS_PER_REQUEST) + 1));
+      }
+      if (responses.length === 0) responses.push(await postCompareChunk(csvText, 1));
+
+      if (responses.some(data => data.dbEmpty)) {
         setDbEmpty(true);
         setRows([]);
         toast({ variant: "destructive", title: "Michigan database not loaded", description: "Go to More → Refresh Data first." });
@@ -445,7 +498,8 @@ useEffect(() => {
       }
 
       setDbEmpty(false);
-      const hydrated: ComparisonRow[] = data.rows.map((r: any) => ({
+      const responseRows = responses.flatMap(data => data.rows || []);
+      const hydrated: ComparisonRow[] = responseRows.map((r: any) => ({
         ...r, resolvedByUser: false, newPrice: r.registerPrice, useCustomName: false, customName: r.name,
       }));
       setRows(hydrated);
@@ -544,10 +598,11 @@ useEffect(() => {
       });
 
   const allRowsWithIdx = rows.map((row, origIdx) => ({ row, origIdx }));
-  const visible = applyFilters(allRowsWithIdx);
+  const filteredRows = applyFilters(allRowsWithIdx);
+  const visible = filteredRows.slice(0, MAX_VISIBLE_ROWS);
 
   // ── Scan mode ─────────────────────────────────────────────────────────────
-  const handleBarcodeScan = useCallback((barcode: string) => {
+  const handleBarcodeScan = useCallback(async (barcode: string) => {
     if (rows.length === 0) {
       toast({ variant: "destructive", title: "No CSV loaded", description: "Upload your register CSV first, then scan bottles." });
       return;
@@ -559,7 +614,53 @@ useEffect(() => {
       .map(({ i }) => i);
 
     if (matchingIndices.length === 0) {
-      toast({ variant: "destructive", title: "Not in your CSV", description: `UPC ${barcode} wasn't found in your register file.` });
+      try {
+        const authHeaders = await getAuthHeaders();
+        const res = await fetch("/api/scan-barcode", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...authHeaders },
+          credentials: "include",
+          body: JSON.stringify({ barcode }),
+        });
+        const data = await res.json().catch(() => null);
+        if (!res.ok || !data?.success) {
+          throw new Error(data?.error || `UPC ${barcode} wasn't found in your CSV or the price book.`);
+        }
+
+        const product: LiquorRecord | undefined = data.requiresSelection ? data.matchedProducts?.[0] : data.matchedProduct;
+        if (!product) throw new Error(`UPC ${barcode} wasn't found in your CSV or the price book.`);
+
+        const productName = `${product.brandName} ${product.bottleSize || ''}`.trim();
+        const shelfPrice = product.shelfPrice ?? 0;
+        const priceBookRow: ComparisonRow = {
+          upc: barcode,
+          name: productName,
+          registerPrice: shelfPrice,
+          department: "Liquor",
+          liquorCode: product.liquorCode || '',
+          matched: true,
+          matchedBy: 'upc',
+          multipleMatches: !!data.requiresSelection,
+          allMatches: data.requiresSelection ? data.matchedProducts : undefined,
+          resolvedByUser: false,
+          michiganPrice: product.shelfPrice ?? null,
+          michiganName: productName,
+          michiganBottleSize: product.bottleSize ?? null,
+          michiganLiquorCode: product.liquorCode ?? null,
+          priceDiff: null,
+          newPrice: shelfPrice,
+          useCustomName: false,
+          customName: productName,
+          priceBookOnly: true,
+        };
+
+        const newIdx = rows.length;
+        setRows(prev => [...prev, priceBookRow]);
+        setScannedIndices(prev => [newIdx, ...prev]);
+        toast({ title: "Added from price book", description: `${productName} was not in your CSV.` });
+      } catch (err: any) {
+        toast({ variant: "destructive", title: "Not found", description: err.message });
+      }
       return;
     }
     const newIdx = matchingIndices[0];
@@ -615,12 +716,12 @@ useEffect(() => {
     if (diff === null) return <Badge variant="outline" className="text-xs">No match</Badge>;
     if (diff === 0)    return <Badge variant="secondary" className="text-xs">No change</Badge>;
     if (diff > 0) return (
-      <Badge className="text-xs bg-red-100 text-red-700 border-red-200 hover:bg-red-100">
+      <Badge className="text-xs bg-green-100 text-green-700 border-green-200 hover:bg-green-100">
         <TrendingUp className="h-3 w-3 mr-1" />+${diff.toFixed(2)}
       </Badge>
     );
     return (
-      <Badge className="text-xs bg-green-100 text-green-700 border-green-200 hover:bg-green-100">
+      <Badge className="text-xs bg-red-100 text-red-700 border-red-200 hover:bg-red-100">
         <TrendingDown className="h-3 w-3 mr-1" />${diff.toFixed(2)}
       </Badge>
     );
@@ -667,6 +768,11 @@ useEffect(() => {
                       <span className="font-medium text-foreground leading-tight">{row.name}</span>
                       {row.michiganName && row.michiganName !== row.name && (
                         <span className="text-xs text-muted-foreground leading-tight mt-0.5">MI: {row.michiganName}</span>
+                      )}
+                      {row.priceBookOnly && (
+                        <Badge variant="outline" className="mt-1 w-fit text-[10px] border-blue-200 bg-blue-50 text-blue-700">
+                          <Package className="h-3 w-3 mr-1" /> Price book only
+                        </Badge>
                       )}
                     </div>
                   </td>
@@ -883,8 +989,8 @@ useEffect(() => {
                 {/* Summary cards */}
                 <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
                   {[
-                    { label: "Increased", count: totalIncreased, icon: <TrendingUp className="h-4 w-4 text-red-500" />, color: "text-red-600", active: filter === "increased", f: "increased" as Filter },
-                    { label: "Decreased", count: totalDecreased, icon: <TrendingDown className="h-4 w-4 text-green-500" />, color: "text-green-600", active: filter === "decreased", f: "decreased" as Filter },
+                    { label: "Increased", count: totalIncreased, icon: <TrendingUp className="h-4 w-4 text-green-500" />, color: "text-green-600", active: filter === "increased", f: "increased" as Filter },
+                    { label: "Decreased", count: totalDecreased, icon: <TrendingDown className="h-4 w-4 text-red-500" />, color: "text-red-600", active: filter === "decreased", f: "decreased" as Filter },
                     { label: "Same",      count: totalSame,      icon: <CheckCircle className="h-4 w-4 text-blue-500" />,   color: "text-blue-600",  active: filter === "same",      f: "same" as Filter },
                     { label: "Not found", count: totalNotFound,  icon: <AlertCircle className="h-4 w-4 text-amber-500" />, color: "text-amber-600", active: filter === "notfound",  f: "notfound" as Filter },
                     { label: "Ambiguous", count: totalAmbiguous, icon: <HelpCircle className="h-4 w-4 text-orange-500" />, color: "text-orange-600", active: filter === "ambiguous", f: "ambiguous" as Filter },
@@ -916,9 +1022,14 @@ useEffect(() => {
                       Clear filter
                     </Button>
                   )}
-                  <span className="ml-auto text-xs text-muted-foreground self-center">{visible.length} of {rows.length}</span>
+                  <span className="ml-auto text-xs text-muted-foreground self-center">{filteredRows.length} of {rows.length}</span>
                 </div>
 
+                {filteredRows.length > MAX_VISIBLE_ROWS && (
+                  <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                    Showing the first {MAX_VISIBLE_ROWS} matching products to keep large imports responsive. Search, sort, filter, and exports still use all {filteredRows.length} matching products.
+                  </div>
+                )}
                 <ComparisonTable rowsWithIdx={visible} />
               </>
             )}
@@ -943,18 +1054,18 @@ useEffect(() => {
                 </Card>
                 <Card className="flex-1 min-w-[100px]">
                   <CardContent className="py-3 px-4 flex items-center gap-2">
-                    <TrendingUp className="h-4 w-4 text-red-500" />
+                    <TrendingUp className="h-4 w-4 text-green-500" />
                     <div>
-                      <p className="text-xl font-bold text-red-600">{scanIncreased}</p>
+                      <p className="text-xl font-bold text-green-600">{scanIncreased}</p>
                       <p className="text-xs text-muted-foreground">Price up</p>
                     </div>
                   </CardContent>
                 </Card>
                 <Card className="flex-1 min-w-[100px]">
                   <CardContent className="py-3 px-4 flex items-center gap-2">
-                    <TrendingDown className="h-4 w-4 text-green-500" />
+                    <TrendingDown className="h-4 w-4 text-red-500" />
                     <div>
-                      <p className="text-xl font-bold text-green-600">{scanDecreased}</p>
+                      <p className="text-xl font-bold text-red-600">{scanDecreased}</p>
                       <p className="text-xs text-muted-foreground">Price down</p>
                     </div>
                   </CardContent>
@@ -1099,7 +1210,7 @@ useEffect(() => {
                         <>
                           <p className="font-bold text-foreground">${miPrice.toFixed(2)}</p>
                           {diff !== null && diff !== 0 && (
-                            <p className={`text-xs font-medium ${diff > 0 ? "text-red-600" : "text-green-600"}`}>
+                            <p className={`text-xs font-medium ${diff > 0 ? "text-green-600" : "text-red-600"}`}>
                               {diff > 0 ? "+" : ""}{diff.toFixed(2)} vs yours
                             </p>
                           )}

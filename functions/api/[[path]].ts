@@ -25,6 +25,38 @@ app.use('*', cors({
 
 const db = (c: any) => new D1Storage(c.env.DB);
 
+function normalizeUpc(upc: string | null | undefined): string {
+  if (!upc) return '';
+  return upc.replace(/^0+/, '') || '0';
+}
+
+function splitCsvRecords(csvText: string): string[] {
+  const records: string[] = [];
+  let current = '';
+  let inQuotes = false;
+
+  for (let i = 0; i < csvText.length; i++) {
+    const ch = csvText[i];
+    if (ch === '"') {
+      current += ch;
+      if (inQuotes && csvText[i + 1] === '"') {
+        current += csvText[++i];
+      } else {
+        inQuotes = !inQuotes;
+      }
+    } else if ((ch === '\n' || ch === '\r') && !inQuotes) {
+      if (ch === '\r' && csvText[i + 1] === '\n') i++;
+      records.push(current);
+      current = '';
+    } else {
+      current += ch;
+    }
+  }
+
+  if (current || csvText.endsWith('\n') || csvText.endsWith('\r')) records.push(current);
+  return records;
+}
+
 // ── Clerk JWT verification (no SDK needed — uses Web Crypto + Clerk REST API) ─
 
 let _jwksCache: any[] = [];
@@ -607,12 +639,39 @@ app.get('/custom-names', requireAuth, async (c) => {
 
 app.post('/compare-prices', requireAuth, async (c) => {
   try {
-    const { csvText } = await c.req.json<{ csvText: string }>();
+    const contentType = c.req.header('content-type') || '';
+    const csvText = contentType.includes('application/json')
+      ? (await c.req.json<{ csvText: string }>()).csvText
+      : await c.req.text();
     if (!csvText) return c.json({ success: false, error: 'No CSV provided' }, 400);
     const storage = db(c);
 
     const dbCount = await storage.getLiquorRecordCount();
     if (!dbCount) return c.json({ success: true, rows: [], totalRows: 0, dbEmpty: true });
+
+    const allLiquorRecords = await storage.getLiquorRecords();
+    const recordsByUpc = new Map<string, typeof allLiquorRecords>();
+    const recordsByCode = new Map<string, typeof allLiquorRecords>();
+    const toClientMatch = (record: typeof allLiquorRecords[number]) => ({
+      id: record.id,
+      brandName: record.brandName,
+      bottleSize: record.bottleSize,
+      shelfPrice: record.shelfPrice,
+      liquorCode: record.liquorCode,
+    });
+    const addToIndex = (index: Map<string, typeof allLiquorRecords>, key: string | null | undefined, record: typeof allLiquorRecords[number]) => {
+      if (!key) return;
+      const normalized = normalizeUpc(key);
+      if (!normalized || normalized === '0') return;
+      const matches = index.get(normalized);
+      if (matches) matches.push(record);
+      else index.set(normalized, [record]);
+    };
+    for (const record of allLiquorRecords) {
+      addToIndex(recordsByUpc, record.upcCode1, record);
+      addToIndex(recordsByUpc, record.upcCode2, record);
+      addToIndex(recordsByCode, record.liquorCode, record);
+    }
 
     function parseCsvLine(line: string): string[] {
       const fields: string[] = [];
@@ -627,7 +686,7 @@ app.post('/compare-prices', requireAuth, async (c) => {
       return fields;
     }
 
-    const lines = csvText.split(/\r?\n/).filter((l: string) => l.trim());
+    const lines = splitCsvRecords(csvText).filter((l: string) => l.trim());
     if (lines.length < 2) return c.json({ success: false, error: 'CSV too short' }, 400);
 
     const normalizeHeader = (h: string) => h.toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -668,10 +727,10 @@ app.post('/compare-prices', requireAuth, async (c) => {
       if (rawCents) registerPrice = parseInt(rawCents.replace(/[^0-9-]/g, ''), 10) / 100;
       else if (rawPrice) registerPrice = parseFloat(rawPrice.replace(/[^0-9.]/g, '')) || 0;
 
-      let matches = await storage.findAllLiquorByBarcode(rawUpc);
+      let matches = recordsByUpc.get(normalizeUpc(rawUpc)) || [];
       let matchedBy: 'upc' | 'code' | null = matches.length ? 'upc' : null;
       if (!matches.length && sizeCode) {
-        matches = await storage.findAllLiquorByCode(sizeCode);
+        matches = recordsByCode.get(normalizeUpc(sizeCode)) || [];
         if (matches.length) matchedBy = 'code';
       }
 
@@ -682,17 +741,18 @@ app.post('/compare-prices', requireAuth, async (c) => {
       rows.push({
         upc: rawUpc, name: rawName, registerPrice, department: dept, liquorCode: sizeCode,
         matched: !!match, matchedBy, multipleMatches: matches.length > 1,
-        allMatches: matches.length > 1 ? matches : undefined,
+        allMatches: matches.length > 1 ? matches.map(toClientMatch) : undefined,
         michiganPrice, michiganName: match ? `${match.brandName} ${match.bottleSize}` : null,
         michiganBottleSize: match?.bottleSize ?? null,
         michiganLiquorCode: match?.liquorCode ?? null,
-        michiganRecord: match ?? null, priceDiff,
+        priceDiff,
       });
     }
 
     return c.json({ success: true, rows, totalRows: rows.length });
   } catch (err) {
-    return c.json({ success: false, error: 'Failed to compare prices' }, 500);
+    console.error('compare-prices error:', err);
+    return c.json({ success: false, error: `Failed to compare prices: ${err instanceof Error ? err.message : String(err)}` }, 500);
   }
 });
 
