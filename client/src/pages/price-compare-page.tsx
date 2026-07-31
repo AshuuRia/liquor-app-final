@@ -38,6 +38,7 @@ interface ComparisonRow {
   newPrice: number;
   useCustomName: boolean;
   customName: string;
+  priceBookOnly?: boolean;
 }
 
 interface SessionMeta {
@@ -601,7 +602,7 @@ useEffect(() => {
   const visible = filteredRows.slice(0, MAX_VISIBLE_ROWS);
 
   // ── Scan mode ─────────────────────────────────────────────────────────────
-  const handleBarcodeScan = useCallback((barcode: string) => {
+  const handleBarcodeScan = useCallback(async (barcode: string) => {
     if (rows.length === 0) {
       toast({ variant: "destructive", title: "No CSV loaded", description: "Upload your register CSV first, then scan bottles." });
       return;
@@ -613,7 +614,53 @@ useEffect(() => {
       .map(({ i }) => i);
 
     if (matchingIndices.length === 0) {
-      toast({ variant: "destructive", title: "Not in your CSV", description: `UPC ${barcode} wasn't found in your register file.` });
+      try {
+        const authHeaders = await getAuthHeaders();
+        const res = await fetch("/api/scan-barcode", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...authHeaders },
+          credentials: "include",
+          body: JSON.stringify({ barcode }),
+        });
+        const data = await res.json().catch(() => null);
+        if (!res.ok || !data?.success) {
+          throw new Error(data?.error || `UPC ${barcode} wasn't found in your CSV or the price book.`);
+        }
+
+        const product: LiquorRecord | undefined = data.requiresSelection ? data.matchedProducts?.[0] : data.matchedProduct;
+        if (!product) throw new Error(`UPC ${barcode} wasn't found in your CSV or the price book.`);
+
+        const productName = `${product.brandName} ${product.bottleSize || ''}`.trim();
+        const shelfPrice = product.shelfPrice ?? 0;
+        const priceBookRow: ComparisonRow = {
+          upc: barcode,
+          name: productName,
+          registerPrice: shelfPrice,
+          department: "Liquor",
+          liquorCode: product.liquorCode || '',
+          matched: true,
+          matchedBy: 'upc',
+          multipleMatches: !!data.requiresSelection,
+          allMatches: data.requiresSelection ? data.matchedProducts : undefined,
+          resolvedByUser: false,
+          michiganPrice: product.shelfPrice ?? null,
+          michiganName: productName,
+          michiganBottleSize: product.bottleSize ?? null,
+          michiganLiquorCode: product.liquorCode ?? null,
+          priceDiff: null,
+          newPrice: shelfPrice,
+          useCustomName: false,
+          customName: productName,
+          priceBookOnly: true,
+        };
+
+        const newIdx = rows.length;
+        setRows(prev => [...prev, priceBookRow]);
+        setScannedIndices(prev => [newIdx, ...prev]);
+        toast({ title: "Added from price book", description: `${productName} was not in your CSV.` });
+      } catch (err: any) {
+        toast({ variant: "destructive", title: "Not found", description: err.message });
+      }
       return;
     }
     const newIdx = matchingIndices[0];
@@ -721,6 +768,11 @@ useEffect(() => {
                       <span className="font-medium text-foreground leading-tight">{row.name}</span>
                       {row.michiganName && row.michiganName !== row.name && (
                         <span className="text-xs text-muted-foreground leading-tight mt-0.5">MI: {row.michiganName}</span>
+                      )}
+                      {row.priceBookOnly && (
+                        <Badge variant="outline" className="mt-1 w-fit text-[10px] border-blue-200 bg-blue-50 text-blue-700">
+                          <Package className="h-3 w-3 mr-1" /> Price book only
+                        </Badge>
                       )}
                     </div>
                   </td>
