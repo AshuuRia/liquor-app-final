@@ -603,10 +603,15 @@ useEffect(() => {
     else { setSortKey(key); setSortDir("asc"); }
   };
 
+  // In CSV comparison mode, show the store price relative to the Michigan minimum.
+  // Scan mode keeps the existing Michigan-price-change direction.
+  const displayedPriceDiff = (row: ComparisonRow): number | null =>
+    pageMode === "csv" && row.priceDiff !== null ? -row.priceDiff : row.priceDiff;
+
   // ── Derived data ──────────────────────────────────────────────────────────
-  const totalIncreased = rows.filter(r => r.priceDiff !== null && r.priceDiff > 0).length;
-  const totalDecreased = rows.filter(r => r.priceDiff !== null && r.priceDiff < 0).length;
-  const totalSame      = rows.filter(r => r.priceDiff === 0).length;
+  const totalIncreased = rows.filter(r => displayedPriceDiff(r) !== null && displayedPriceDiff(r)! > 0).length;
+  const totalDecreased = rows.filter(r => displayedPriceDiff(r) !== null && displayedPriceDiff(r)! < 0).length;
+  const totalSame      = rows.filter(r => displayedPriceDiff(r) === 0).length;
   const totalNotFound  = rows.filter(r => !r.matched).length;
   const totalAmbiguous = rows.filter(r => r.multipleMatches && !r.resolvedByUser).length;
   const totalChanged   = rows.filter(r => Math.round((r.newPrice - r.registerPrice) * 100) !== 0).length;
@@ -614,9 +619,10 @@ useEffect(() => {
   const applyFilters = (source: { row: ComparisonRow; origIdx: number }[]) =>
     source
       .filter(({ row: r }) => {
-        if (filter === "increased") return r.priceDiff !== null && r.priceDiff > 0;
-        if (filter === "decreased") return r.priceDiff !== null && r.priceDiff < 0;
-        if (filter === "same")      return r.priceDiff === 0;
+        const diff = displayedPriceDiff(r);
+        if (filter === "increased") return diff !== null && diff > 0;
+        if (filter === "decreased") return diff !== null && diff < 0;
+        if (filter === "same")      return diff === 0;
         if (filter === "notfound")  return !r.matched;
         if (filter === "ambiguous") return r.multipleMatches && !r.resolvedByUser;
         return true;
@@ -631,7 +637,7 @@ useEffect(() => {
         if (sortKey === "name")               { av = a.row.name;          bv = b.row.name; }
         else if (sortKey === "registerPrice") { av = a.row.registerPrice; bv = b.row.registerPrice; }
         else if (sortKey === "michiganPrice") { av = a.row.michiganPrice ?? -1; bv = b.row.michiganPrice ?? -1; }
-        else if (sortKey === "priceDiff")     { av = a.row.priceDiff ?? 999; bv = b.row.priceDiff ?? 999; }
+        else if (sortKey === "priceDiff")     { av = displayedPriceDiff(a.row) ?? 999; bv = displayedPriceDiff(b.row) ?? 999; }
         else                                  { av = a.row.newPrice; bv = b.row.newPrice; }
         if (av < bv) return sortDir === "asc" ? -1 : 1;
         if (av > bv) return sortDir === "asc" ? 1  : -1;
@@ -830,7 +836,7 @@ useEffect(() => {
                   <td className="px-3 py-2.5">
                     {needsReview
                       ? <Badge className="text-xs bg-orange-100 text-orange-700 border-orange-200 hover:bg-orange-100 cursor-pointer" onClick={() => openPickMatch(origIdx, row)}>Pick match</Badge>
-                      : <DiffBadge diff={row.priceDiff} />
+                      : <DiffBadge diff={displayedPriceDiff(row)} />
                     }
                   </td>
                   <td className="px-3 py-2.5">
@@ -1242,7 +1248,11 @@ useEffect(() => {
             )}
             {disambigRow?.row.allMatches?.map((match, i) => {
               const miPrice = match.shelfPrice ?? null;
-              const diff    = miPrice !== null ? Math.round((miPrice - disambigRow.row.registerPrice) * 100) / 100 : null;
+              const diff    = miPrice !== null
+                ? Math.round((pageMode === "csv"
+                  ? disambigRow.row.registerPrice - miPrice
+                  : miPrice - disambigRow.row.registerPrice) * 100) / 100
+                : null;
               const isCurr  = disambigRow.row.resolvedByUser && disambigRow.row.michiganName === `${match.brandName} ${match.bottleSize}`;
               return (
                 <button key={i} onClick={() => applyMatch(disambigRow.origIdx, match)}
