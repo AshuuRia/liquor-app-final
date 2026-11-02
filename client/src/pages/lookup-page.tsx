@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState, useCallback } from "react";
-import { getAuthHeaders } from "@/lib/queryClient";
 import { BrowserMultiFormatReader } from "@zxing/browser";
 import { DecodeHintType } from "@zxing/library";
 import { scanImageData, setModuleArgs } from "@undecaf/zbar-wasm";
@@ -264,7 +263,7 @@ export default function LookupPage() {
     try {
       const res = await fetch(`/api/search-liquor?query=${encodeURIComponent(code)}`);
       const data = await res.json();
-      const normalizeCode = (value: unknown) => String(value ?? "").replace(/\\D/g, "").replace(/^0+/, "") || "0";
+      const normalizeCode = (value: unknown) => String(value ?? "").replace(/\D/g, "").replace(/^0+/, "") || "0";
       const normalizedCode = normalizeCode(code);
       const matchedProducts = (data.results || []).filter((record: LiquorRecord) =>
         [record.upcCode1, record.upcCode2, record.liquorCode].some(value => normalizeCode(value) === normalizedCode)
