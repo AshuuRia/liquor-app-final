@@ -939,7 +939,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
         let matches = recordsByUpc.get(stripExcel(rawUpc).replace(/^0+/, '') || '0') || [];
         let matchedBy: 'upc' | 'code' | null = matches.length > 0 ? 'upc' : null;
-        const embeddedLiquorCode = rawUpc.match(/^[a-f0-9]{64}\|(\d+)$/i)?.[1];
+        const embeddedLiquorCode = rawUpc.match(/^[a-f0-9]+\|(\d+)$/i)?.[1];
         const matchCode = embeddedLiquorCode || sizeCode;
         if (matches.length === 0 && matchCode) {
           matches = recordsByCode.get(matchCode.replace(/^0+/, '') || '0') || [];
