@@ -876,7 +876,7 @@ app.post('/compare-prices', requireAuth, async (c) => {
       const priceDiff = michiganPrice !== null ? Math.round((michiganPrice - registerPrice) * 100) / 100 : null;
 
       rows.push({
-        upc: rawUpc, name: rawName, registerPrice, department: dept, liquorCode: match?.liquorCode || embeddedLiquorCode || sizeCode,
+        upc: rawUpc, name: rawName, registerPrice, department: dept, liquorCode: match?.liquorCode || sizeCode,
         matched: !!match, matchedBy, multipleMatches: matches.length > 1,
         allMatches: matches.length > 1 ? matches.map(toClientMatch) : undefined,
         michiganPrice, michiganName: match ? `${match.brandName} ${match.bottleSize}` : null,
