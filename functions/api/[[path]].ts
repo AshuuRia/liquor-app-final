@@ -860,8 +860,10 @@ app.post('/compare-prices', requireAuth, async (c) => {
       if (!rawUpc && !rawName) continue;
 
       let registerPrice = 0;
-      if (rawCents) registerPrice = parseInt(rawCents.replace(/[^0-9-]/g, ''), 10) / 100;
-      else if (rawPrice) registerPrice = parseFloat(rawPrice.replace(/[^0-9.]/g, '')) || 0;
+      const priceFromDollars = rawPrice ? parseFloat(rawPrice.replace(/[^0-9.]/g, '')) : NaN;
+      const priceFromCents = rawCents ? parseInt(rawCents.replace(/[^0-9-]/g, ''), 10) / 100 : NaN;
+      if (Number.isFinite(priceFromDollars)) registerPrice = priceFromDollars;
+      else if (Number.isFinite(priceFromCents)) registerPrice = priceFromCents;
 
       const canReadUpc = /^\d+$/.test(rawUpc);
       let matches = canReadUpc ? recordsByUpc.get(normalizeCompareUpc(rawUpc)) || [] : [];
