@@ -726,6 +726,7 @@ app.post('/compare-prices', requireAuth, async (c) => {
       bottleSize: record.bottleSize,
       shelfPrice: record.shelfPrice,
       liquorCode: record.liquorCode,
+      upcCode1: record.upcCode1,
     });
     const addToIndex = (index: Map<string, typeof allLiquorRecords>, key: string | null | undefined, record: typeof allLiquorRecords[number]) => {
       if (!key) return;
@@ -797,8 +798,10 @@ app.post('/compare-prices', requireAuth, async (c) => {
 
       let matches = recordsByUpc.get(normalizeUpc(rawUpc)) || [];
       let matchedBy: 'upc' | 'code' | null = matches.length ? 'upc' : null;
-      if (!matches.length && sizeCode) {
-        matches = recordsByCode.get(normalizeUpc(sizeCode)) || [];
+      const embeddedLiquorCode = rawUpc.match(/^[a-f0-9]{64}\|(\d+)$/i)?.[1];
+      const matchCode = embeddedLiquorCode || sizeCode;
+      if (!matches.length && matchCode) {
+        matches = recordsByCode.get(normalizeUpc(matchCode)) || [];
         if (matches.length) matchedBy = 'code';
       }
 
@@ -813,6 +816,7 @@ app.post('/compare-prices', requireAuth, async (c) => {
         michiganPrice, michiganName: match ? `${match.brandName} ${match.bottleSize}` : null,
         michiganBottleSize: match?.bottleSize ?? null,
         michiganLiquorCode: match?.liquorCode ?? null,
+        michiganUpc: match?.upcCode1 ?? null,
         priceDiff,
       });
     }
