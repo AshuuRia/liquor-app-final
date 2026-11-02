@@ -417,8 +417,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!req.file) return res.status(400).json({ success: false, error: "No file uploaded" });
       const fileContent = req.file.buffer.toString('utf-8');
       const txtRecords = parsePriceBookTxt(fileContent);
+      const barcodeRecords = await fetchBarcodeTxtRecords();
       const excelBuffer = await loadLocalOrRemoteExcel();
-      const result = parseExcelPriceBook(excelBuffer, buildTxtRecordMap(txtRecords));
+      const result = parseExcelPriceBook(excelBuffer, buildTxtRecordMap(mergeBarcodeRecords(txtRecords, barcodeRecords)));
       await storage.clearLiquorRecords();
       await storage.bulkCreateLiquorRecords(result.records);
       await storage.clearPriceBookChanges();
