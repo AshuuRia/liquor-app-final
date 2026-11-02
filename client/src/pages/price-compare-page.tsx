@@ -817,7 +817,11 @@ useEffect(() => {
                       )}
                     </div>
                   </td>
-                  <td className="px-3 py-2.5 font-mono text-xs text-muted-foreground whitespace-nowrap">{row.michiganUpc || row.upc}</td>
+                  <td className="px-3 py-2.5 font-mono text-xs text-muted-foreground">
+                    <div className="block max-w-[9rem] truncate" title={row.michiganUpc || row.upc}>
+                      {row.michiganUpc || row.upc}
+                    </div>
+                  </td>
                   <td className="px-3 py-2.5 font-mono text-xs text-muted-foreground whitespace-nowrap">{row.michiganLiquorCode || row.liquorCode || "—"}</td>
                   <td className="px-3 py-2.5 text-right tabular-nums">${row.registerPrice.toFixed(2)}</td>
                   <td className="px-3 py-2.5 text-right tabular-nums">
