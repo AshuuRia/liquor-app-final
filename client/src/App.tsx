@@ -12,6 +12,7 @@ import MorePage from "@/pages/more-page";
 import PriceComparePage from "@/pages/price-compare-page";
 import { ScanLine, Search, ListChecks, MoreHorizontal } from "lucide-react";
 import { loadConfig, isClerkMode, initClerk, getClerk } from "@/lib/clerk";
+import { useAuth } from "@/hooks/use-auth";
 
 // ── Bottom navigation ─────────────────────────────────────────────────────────
 
@@ -22,15 +23,16 @@ const TABS = [
   { path: "/more",    label: "More",    Icon: MoreHorizontal },
 ];
 
-function useSessionItemCount() {
+function useSessionItemCount(isAuthenticated: boolean) {
   const { data: sessionData } = useQuery<any>({
     queryKey: ["/api/sessions/active"],
+    enabled: isAuthenticated,
     refetchInterval: 5000,
   });
   const sessionId = sessionData?.session?.id;
   const { data: itemsData } = useQuery<any>({
     queryKey: ["/api/scanned-items", sessionId],
-    enabled: !!sessionId,
+    enabled: isAuthenticated && !!sessionId,
     refetchInterval: 5000,
   });
   return (itemsData?.items?.length ?? 0) as number;
@@ -38,8 +40,8 @@ function useSessionItemCount() {
 
 function BottomNav() {
   const [location, setLocation] = useLocation();
-  const sessionCount = useSessionItemCount();
   const { isAuthenticated } = useAuth();
+  const sessionCount = useSessionItemCount(isAuthenticated);
   const visibleTabs = isAuthenticated ? TABS : TABS.filter(({ path }) => path !== "/session");
 
   return (
