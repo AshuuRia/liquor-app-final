@@ -955,7 +955,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           name: rawName,
           registerPrice,
           department: dept,
-          liquorCode: sizeCode,
+          liquorCode: match?.liquorCode || embeddedLiquorCode || sizeCode,
           matched: !!match,
           matchedBy,
           multipleMatches: matches.length > 1,
