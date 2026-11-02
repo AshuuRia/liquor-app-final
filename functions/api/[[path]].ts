@@ -781,25 +781,31 @@ app.post('/compare-prices', requireAuth, async (c) => {
     const allLiquorRecords = await storage.getLiquorRecords();
     const recordsByUpc = new Map<string, typeof allLiquorRecords>();
     const recordsByCode = new Map<string, typeof allLiquorRecords>();
+    const normalizeCompareUpc = (value: string | null | undefined): string => {
+      if (!value) return '';
+      const digits = value.replace(/\D/g, '');
+      if (!digits) return '';
+      return digits.length > 12 && digits.startsWith('0') ? digits.slice(-12) : digits;
+    };
     const toClientMatch = (record: typeof allLiquorRecords[number]) => ({
       id: record.id,
       brandName: record.brandName,
       bottleSize: record.bottleSize,
       shelfPrice: record.shelfPrice,
       liquorCode: record.liquorCode,
-      upcCode1: record.upcCode1,
+      upcCode1: record.upcCode1 ? normalizeCompareUpc(record.upcCode1) : null,
     });
-    const addToIndex = (index: Map<string, typeof allLiquorRecords>, key: string | null | undefined, record: typeof allLiquorRecords[number]) => {
+    const addToIndex = (index: Map<string, typeof allLiquorRecords>, key: string | null | undefined, record: typeof allLiquorRecords[number], normalize = normalizeUpc) => {
       if (!key) return;
-      const normalized = normalizeUpc(key);
+      const normalized = normalize(key);
       if (!normalized || normalized === '0') return;
       const matches = index.get(normalized);
       if (matches) matches.push(record);
       else index.set(normalized, [record]);
     };
     for (const record of allLiquorRecords) {
-      addToIndex(recordsByUpc, record.upcCode1, record);
-      addToIndex(recordsByUpc, record.upcCode2, record);
+      addToIndex(recordsByUpc, record.upcCode1, record, normalizeCompareUpc);
+      addToIndex(recordsByUpc, record.upcCode2, record, normalizeCompareUpc);
       addToIndex(recordsByCode, record.liquorCode, record);
     }
 
@@ -857,12 +863,11 @@ app.post('/compare-prices', requireAuth, async (c) => {
       if (rawCents) registerPrice = parseInt(rawCents.replace(/[^0-9-]/g, ''), 10) / 100;
       else if (rawPrice) registerPrice = parseFloat(rawPrice.replace(/[^0-9.]/g, '')) || 0;
 
-      let matches = recordsByUpc.get(normalizeUpc(rawUpc)) || [];
+      const canReadUpc = /^\d+$/.test(rawUpc);
+      let matches = canReadUpc ? recordsByUpc.get(normalizeCompareUpc(rawUpc)) || [] : [];
       let matchedBy: 'upc' | 'code' | null = matches.length ? 'upc' : null;
-      const embeddedLiquorCode = rawUpc.match(/^[a-f0-9]+\|(\d+)$/i)?.[1];
-      const matchCode = embeddedLiquorCode || sizeCode;
-      if (!matches.length && matchCode) {
-        matches = recordsByCode.get(normalizeUpc(matchCode)) || [];
+      if (!canReadUpc && sizeCode) {
+        matches = recordsByCode.get(normalizeUpc(sizeCode)) || [];
         if (matches.length) matchedBy = 'code';
       }
 
@@ -877,7 +882,7 @@ app.post('/compare-prices', requireAuth, async (c) => {
         michiganPrice, michiganName: match ? `${match.brandName} ${match.bottleSize}` : null,
         michiganBottleSize: match?.bottleSize ?? null,
         michiganLiquorCode: match?.liquorCode ?? null,
-        michiganUpc: match?.upcCode1 ?? null,
+        michiganUpc: match?.upcCode1 ? normalizeCompareUpc(match.upcCode1) : null,
         priceDiff,
       });
     }
