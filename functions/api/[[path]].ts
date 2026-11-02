@@ -71,7 +71,8 @@ type ExcelImportResult = {
   priceChanges: number;
 };
 
-const PRICE_BOOK_TXT_URL = 'https://www.michigan.gov/lara/-/media/Project/Websites/lara/lcc/Price-Book/May-2-2026-Price-Book-TXT.txt?rev=0c6b278ff50242b7917b090cc9f6bbc2&hash=CDD79D3A69C5876AEA62FF8E0756ADEA';
+const PRICE_BOOK_TXT_URL = 'https://www.michigan.gov/lara/-/media/Project/Websites/lara/lcc/Price-Book/8-2-26-PRICE-BOOK-TXT.txt?rev=4bab2508c89d433b80df6ce7e0cdf01f&hash=7036AD4F2704380E6C51A488ACBAC4AC';
+const PRICE_BOOK_BARCODE_TXT_URL = 'https://www.michigan.gov/lara/-/media/Project/Websites/lara/lcc/Price-Book/May-2-2026-Price-Book-TXT.txt?rev=0c6b278ff50242b7917b090cc9f6bbc2&hash=CDD79D3A69C5876AEA62FF8E0756ADEA';
 
 function normalizeHeaderValue(value: unknown): string {
   return String(value ?? '').toLowerCase().trim().replace(/[^a-z0-9]/g, '');
@@ -88,7 +89,42 @@ function findHeaderIndex(headers: string[], ...candidates: string[]): number {
 
 function parsePriceBookTxt(content: string): ParsedTsvRecord[] {
   const allLines = content.split('\n').filter((line: string) => line.trim());
-  const lines = allLines[0]?.toLowerCase().includes('liquor code') ? allLines.slice(1) : allLines;
+  if (!allLines.length) return [];
+  const headers = allLines[0].split('\t').map(normalizeHeaderValue);
+  const codeIdx = findHeaderIndex(headers, 'liquor code');
+  const brandIdx = findHeaderIndex(headers, 'brand name final', 'brand name');
+  const categoryIdx = findHeaderIndex(headers, 'liquor type');
+
+  if (codeIdx >= 0 && brandIdx >= 0 && categoryIdx >= 0) {
+    const adaIdx = findHeaderIndex(headers, 'ada number', 'ada #');
+    const proofIdx = findHeaderIndex(headers, 'proof');
+    const bottleSizeIdx = findHeaderIndex(headers, 'bottle size');
+    const packSizeIdx = findHeaderIndex(headers, 'case size', 'pack size');
+    const onPremiseIdx = findHeaderIndex(headers, 'base price', 'on premise');
+    const offPremiseIdx = findHeaderIndex(headers, 'licensee price', 'off premise');
+    const shelfPriceIdx = findHeaderIndex(headers, 'minimum shelf price', 'shelf price');
+    return allLines.slice(1).map((line) => {
+      const cols = line.split('\t');
+      return {
+        liquorCode: (cols[codeIdx] || '').trim(),
+        brandName: (cols[brandIdx] || '').trim(),
+        adaNumber: (cols[adaIdx] || '').trim(),
+        adaName: '',
+        vendorName: '',
+        proof: (cols[proofIdx] || '').trim(),
+        bottleSize: (cols[bottleSizeIdx] || '').trim(),
+        packSize: (cols[packSizeIdx] || '').trim(),
+        onPremisePrice: parsePrice(cols[onPremiseIdx] || ''),
+        offPremisePrice: parsePrice(cols[offPremiseIdx] || ''),
+        shelfPrice: parsePrice(cols[shelfPriceIdx] || ''),
+        upcCode1: '',
+        upcCode2: '',
+        effectiveDate: '',
+      };
+    }).filter((record) => record.liquorCode);
+  }
+
+  const lines = codeIdx >= 0 ? allLines.slice(1) : allLines;
   return lines.map(parseTsvLine).filter((record) => record.liquorCode);
 }
 
@@ -99,6 +135,30 @@ function buildTxtRecordMap(txtRecords: ParsedTsvRecord[]): Map<string, ParsedTsv
     map.set(record.liquorCode.replace(/^0+/, '') || '0', record);
   }
   return map;
+}
+
+function mergeBarcodeRecords(priceRecords: ParsedTsvRecord[], barcodeRecords: ParsedTsvRecord[]): ParsedTsvRecord[] {
+  const barcodeMap = buildTxtRecordMap(barcodeRecords);
+  return priceRecords.map((record) => {
+    const barcodeRecord = barcodeMap.get(record.liquorCode.replace(/^0+/, '') || '0');
+    return {
+      ...barcodeRecord,
+      ...record,
+      adaName: record.adaName || barcodeRecord?.adaName || '',
+      vendorName: record.vendorName || barcodeRecord?.vendorName || '',
+      upcCode1: record.upcCode1 || barcodeRecord?.upcCode1 || '',
+      upcCode2: record.upcCode2 || barcodeRecord?.upcCode2 || '',
+    };
+  });
+}
+
+async function fetchBarcodeTxtRecords(): Promise<ParsedTsvRecord[]> {
+  const response = await fetch(PRICE_BOOK_BARCODE_TXT_URL, {
+    headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
+    signal: AbortSignal.timeout(120000),
+  });
+  if (!response.ok) throw new Error(`Failed to download UPC data: ${response.status} ${response.statusText}`);
+  return parsePriceBookTxt(await response.text());
 }
 
 function parseNewChng(rawChng: unknown): string | null {
@@ -310,8 +370,9 @@ app.get('/auth/user', async (c) => {
 
 async function processPriceBookContent(content: string, storage: D1Storage, requestUrl: string) {
   const txtRecords = parsePriceBookTxt(content);
+  const barcodeRecords = await fetchBarcodeTxtRecords();
   const { buffer, source } = await fetchPriceBookExcelBuffer(requestUrl);
-  const result = parseExcelPriceBook(buffer, buildTxtRecordMap(txtRecords));
+  const result = parseExcelPriceBook(buffer, buildTxtRecordMap(mergeBarcodeRecords(txtRecords, barcodeRecords)));
 
   await storage.clearLiquorRecords();
   await storage.bulkCreateLiquorRecords(result.records);
