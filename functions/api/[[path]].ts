@@ -859,7 +859,7 @@ app.post('/compare-prices', requireAuth, async (c) => {
 
       let matches = recordsByUpc.get(normalizeUpc(rawUpc)) || [];
       let matchedBy: 'upc' | 'code' | null = matches.length ? 'upc' : null;
-      const embeddedLiquorCode = rawUpc.match(/^[a-f0-9]{64}\|(\d+)$/i)?.[1];
+      const embeddedLiquorCode = rawUpc.match(/^[a-f0-9]+\|(\d+)$/i)?.[1];
       const matchCode = embeddedLiquorCode || sizeCode;
       if (!matches.length && matchCode) {
         matches = recordsByCode.get(normalizeUpc(matchCode)) || [];
