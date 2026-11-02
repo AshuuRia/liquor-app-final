@@ -34,6 +34,7 @@ interface ComparisonRow {
   michiganName: string | null;
   michiganBottleSize: string | null;
   michiganLiquorCode: string | null;
+  michiganUpc?: string | null;
   priceDiff: number | null;
   newPrice: number;
   useCustomName: boolean;
@@ -101,8 +102,9 @@ function buildPtouchCsv(rows: ComparisonRow[], useCustomNames: boolean): string 
       ? row.customName.trim()
       : row.name;
     const dept   = useCustomNames ? (row.department === "Liquor" ? "Liquor 2" : row.department) : "Liquor";
+    const exportUpc = /\|\d+$/.test(row.upc) && row.michiganUpc ? row.michiganUpc : row.upc;
     return [
-      `"${row.upc}"`, dept, "1", cents.toString(), "n", "n",
+      `"${exportUpc}"`, dept, "1", cents.toString(), "n", "n",
       `"${name}"`, fmtPrice, `"${row.liquorCode}"`,
       "", "n", "1", "1", "0", "n", "", `"=""0"""`,
       "", "", "", "", "", "n", "", "", "", "", "", "", ""
@@ -550,6 +552,7 @@ useEffect(() => {
       michiganName: `${match.brandName} ${match.bottleSize}`,
       michiganBottleSize: match.bottleSize ?? null,
       michiganLiquorCode: match.liquorCode ?? null,
+      michiganUpc: match.upcCode1 ?? null,
       newPrice: michiganPrice ?? row.registerPrice,
     });
     setDisambigRow(null);
@@ -807,7 +810,7 @@ useEffect(() => {
                       )}
                     </div>
                   </td>
-                  <td className="px-3 py-2.5 font-mono text-xs text-muted-foreground whitespace-nowrap">{row.upc}</td>
+                  <td className="px-3 py-2.5 font-mono text-xs text-muted-foreground whitespace-nowrap">{row.michiganUpc || row.upc}</td>
                   <td className="px-3 py-2.5 font-mono text-xs text-muted-foreground whitespace-nowrap">{row.michiganLiquorCode || row.liquorCode || "—"}</td>
                   <td className="px-3 py-2.5 text-right tabular-nums">${row.registerPrice.toFixed(2)}</td>
                   <td className="px-3 py-2.5 text-right tabular-nums">
