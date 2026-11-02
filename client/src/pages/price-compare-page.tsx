@@ -657,7 +657,9 @@ useEffect(() => {
     const norm = normalizeBarcode(barcode);
     const matchingIndices = rows
       .map((r, i) => ({ r, i }))
-      .filter(({ r }) => { const ru = normalizeBarcode(r.upc); return ru === norm || ru === barcode; })
+      .filter(({ r }) => [r.upc, r.michiganUpc]
+        .filter((upc): upc is string => !!upc)
+        .some(upc => normalizeBarcode(upc) === norm || upc === barcode))
       .map(({ i }) => i);
 
     if (matchingIndices.length === 0) {
@@ -694,6 +696,7 @@ useEffect(() => {
           michiganName: productName,
           michiganBottleSize: product.bottleSize ?? null,
           michiganLiquorCode: product.liquorCode ?? null,
+          michiganUpc: product.upcCode1 ? normalizeCompareUpc(product.upcCode1) : null,
           priceDiff: null,
           newPrice: shelfPrice,
           useCustomName: false,
