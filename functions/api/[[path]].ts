@@ -72,7 +72,6 @@ type ExcelImportResult = {
 };
 
 const PRICE_BOOK_TXT_URL = 'https://www.michigan.gov/lara/-/media/Project/Websites/lara/lcc/Price-Book/May-2-2026-Price-Book-TXT.txt?rev=0c6b278ff50242b7917b090cc9f6bbc2&hash=CDD79D3A69C5876AEA62FF8E0756ADEA';
-const PRICE_BOOK_EXCEL_URL = 'https://www.michigan.gov/lara/-/media/Project/Websites/lara/lcc/Price-Book/5-3-26-PRICE-BOOK-Excel.xlsx?rev=6a054889b3c3465a88a3ae2656a6733b&hash=95B952FA318836F5B90F5E2F90EB3E65';
 
 function normalizeHeaderValue(value: unknown): string {
   return String(value ?? '').toLowerCase().trim().replace(/[^a-z0-9]/g, '');
@@ -200,12 +199,7 @@ async function fetchPriceBookExcelBuffer(requestUrl: string): Promise<{ buffer: 
     return res.arrayBuffer();
   }
 
-  try {
-    return { buffer: await fetchBuffer(localUrl), source: 'local' };
-  } catch (localErr) {
-    console.warn('Local price book missing, falling back to live URL:', String(localErr));
-    return { buffer: await fetchBuffer(PRICE_BOOK_EXCEL_URL), source: 'live' };
-  }
+  return { buffer: await fetchBuffer(localUrl), source: 'local' };
 }
 
 // ── Clerk JWT verification (no SDK needed — uses Web Crypto + Clerk REST API) ─
