@@ -2,11 +2,13 @@ import { useState } from "react";
 import { useLocation } from "wouter";
 import {
   TrendingUp, RefreshCw, Upload, ChevronRight,
-  Database, Tag, Info, ArrowUpDown
+  Database, Tag, Info, ArrowUpDown, LogIn, LogOut, User
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
 import { apiRequest } from "@/lib/queryClient";
+import { useAuth } from "@/hooks/use-auth";
+import { getClerk, isClerkMode } from "@/lib/clerk";
 
 interface DbStatus {
   totalRecords: number;
@@ -57,6 +59,7 @@ function Divider() {
 export default function MorePage() {
   const [, setLocation] = useLocation();
   const { toast } = useToast();
+  const { user, isAuthenticated, logout, isLoggingOut } = useAuth();
   const [refreshing, setRefreshing]           = useState(false);
   const [refreshingChanges, setRefreshingChanges] = useState(false);
   const [dbStatus, setDbStatus]               = useState<DbStatus | null>(null);
@@ -64,6 +67,11 @@ export default function MorePage() {
   const [showUpload, setShowUpload]           = useState(false);
   const [uploading, setUploading]             = useState(false);
   const [dragOver, setDragOver]               = useState(false);
+
+  const handleSignIn = () => {
+    if (isClerkMode()) getClerk()?.openSignIn();
+    else window.location.href = "/api/login";
+  };
 
   const refreshData = async () => {
     setRefreshing(true);
@@ -136,6 +144,27 @@ export default function MorePage() {
 
       <div className="px-4 pt-4 pb-3 bg-white dark:bg-zinc-900">
         <h1 className="text-xl font-bold text-zinc-900 dark:text-zinc-100">More</h1>
+      </div>
+
+      <SectionHeader title="Account" />
+      <div className="mx-4 mt-2 bg-white dark:bg-zinc-900 rounded-2xl p-4 shadow-sm">
+        <div className="flex items-center gap-3">
+          <div className="w-9 h-9 rounded-xl bg-blue-50 dark:bg-blue-900/30 flex items-center justify-center">
+            <User className="h-5 w-5 text-blue-500" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="text-sm font-medium text-zinc-900 dark:text-zinc-100">
+              {isAuthenticated ? (user?.firstName || user?.email || "Signed in") : "Browsing as a guest"}
+            </div>
+            <div className="text-xs text-zinc-500 dark:text-zinc-400 mt-0.5">
+              {isAuthenticated ? "Your account is connected" : "Sign in to save sessions and use account features"}
+            </div>
+          </div>
+        </div>
+        <Button onClick={isAuthenticated ? () => logout() : handleSignIn} disabled={isLoggingOut} variant="outline" className="mt-3 w-full" data-testid={isAuthenticated ? "button-logout" : "button-login"}>
+          {isAuthenticated ? <LogOut className="h-4 w-4 mr-2" /> : <LogIn className="h-4 w-4 mr-2" />}
+          {isLoggingOut ? "Signing out…" : isAuthenticated ? "Sign out" : "Sign in"}
+        </Button>
       </div>
 
       {/* Database status card */}
