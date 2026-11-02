@@ -875,25 +875,31 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const allLiquorRecords = await storage.getLiquorRecords();
       const recordsByUpc = new Map<string, typeof allLiquorRecords>();
       const recordsByCode = new Map<string, typeof allLiquorRecords>();
+      const normalizeCompareUpc = (value: string | null | undefined): string => {
+        if (!value) return '';
+        const digits = value.replace(/\D/g, '');
+        if (!digits) return '';
+        return digits.length > 12 && digits.startsWith('0') ? digits.slice(-12) : digits;
+      };
       const toClientMatch = (record: typeof allLiquorRecords[number]) => ({
         id: record.id,
         brandName: record.brandName,
         bottleSize: record.bottleSize,
         shelfPrice: record.shelfPrice,
         liquorCode: record.liquorCode,
-        upcCode1: record.upcCode1,
+        upcCode1: record.upcCode1 ? normalizeCompareUpc(record.upcCode1) : null,
       });
-      const addToIndex = (index: Map<string, typeof allLiquorRecords>, key: string | null | undefined, record: typeof allLiquorRecords[number]) => {
+      const addToIndex = (index: Map<string, typeof allLiquorRecords>, key: string | null | undefined, record: typeof allLiquorRecords[number], normalize = (value: string) => value.replace(/^0+/, '') || '0') => {
         if (!key) return;
-        const normalized = key.replace(/^0+/, '') || '0';
+        const normalized = normalize(key);
         if (!normalized || normalized === '0') return;
         const matches = index.get(normalized);
         if (matches) matches.push(record);
         else index.set(normalized, [record]);
       };
       for (const record of allLiquorRecords) {
-        addToIndex(recordsByUpc, record.upcCode1, record);
-        addToIndex(recordsByUpc, record.upcCode2, record);
+        addToIndex(recordsByUpc, record.upcCode1, record, normalizeCompareUpc);
+        addToIndex(recordsByUpc, record.upcCode2, record, normalizeCompareUpc);
         addToIndex(recordsByCode, record.liquorCode, record);
       }
 
@@ -937,12 +943,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (rawCents) registerPrice = parseInt(rawCents, 10) / 100;
         else if (rawPrice) registerPrice = parseFloat(rawPrice.replace(/[^0-9.]/g, '')) || 0;
 
-        let matches = recordsByUpc.get(stripExcel(rawUpc).replace(/^0+/, '') || '0') || [];
+        const canReadUpc = /^\d+$/.test(rawUpc);
+        let matches = canReadUpc ? recordsByUpc.get(normalizeCompareUpc(rawUpc)) || [] : [];
         let matchedBy: 'upc' | 'code' | null = matches.length > 0 ? 'upc' : null;
-        const embeddedLiquorCode = rawUpc.match(/^[a-f0-9]+\|(\d+)$/i)?.[1];
-        const matchCode = embeddedLiquorCode || sizeCode;
-        if (matches.length === 0 && matchCode) {
-          matches = recordsByCode.get(matchCode.replace(/^0+/, '') || '0') || [];
+        if (!canReadUpc && sizeCode) {
+          matches = recordsByCode.get(sizeCode.replace(/^0+/, '') || '0') || [];
           if (matches.length > 0) matchedBy = 'code';
         }
 
@@ -955,7 +960,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           name: rawName,
           registerPrice,
           department: dept,
-          liquorCode: match?.liquorCode || embeddedLiquorCode || sizeCode,
+          liquorCode: match?.liquorCode || sizeCode,
           matched: !!match,
           matchedBy,
           multipleMatches: matches.length > 1,
@@ -964,7 +969,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           michiganName: match ? `${match.brandName} ${match.bottleSize}` : null,
           michiganBottleSize: match?.bottleSize ?? null,
           michiganLiquorCode: match?.liquorCode ?? null,
-          michiganUpc: match?.upcCode1 ?? null,
+          michiganUpc: match?.upcCode1 ? normalizeCompareUpc(match.upcCode1) : null,
           priceDiff,
         });
       }
