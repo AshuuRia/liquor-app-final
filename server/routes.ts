@@ -124,7 +124,6 @@ type ExcelImportResult = {
   priceChanges: number;
 };
 
-const PRICE_BOOK_EXCEL_URL = 'https://www.michigan.gov/lara/-/media/Project/Websites/lara/lcc/Price-Book/5-3-26-PRICE-BOOK-Excel.xlsx?rev=6a054889b3c3465a88a3ae2656a6733b&hash=95B952FA318836F5B90F5E2F90EB3E65';
 const PRICE_BOOK_TXT_URL = 'https://www.michigan.gov/lara/-/media/Project/Websites/lara/lcc/Price-Book/May-2-2026-Price-Book-TXT.txt?rev=0c6b278ff50242b7917b090cc9f6bbc2&hash=CDD79D3A69C5876AEA62FF8E0756ADEA';
 
 function normalizeHeaderValue(value: unknown): string {
@@ -239,18 +238,9 @@ function parseExcelPriceBook(buffer: ArrayBuffer | Buffer, txtRecordMap = new Ma
 
 async function loadLocalOrRemoteExcel(): Promise<ArrayBuffer> {
   const localFilePath = new URL("../client/public/data/price-book.xlsx", import.meta.url);
-  try {
-    const fs = await import("node:fs/promises");
-    const localFile = await fs.readFile(localFilePath);
-    return localFile.buffer.slice(localFile.byteOffset, localFile.byteOffset + localFile.byteLength);
-  } catch {
-    const response = await fetch(PRICE_BOOK_EXCEL_URL, {
-      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
-      signal: AbortSignal.timeout(120000),
-    });
-    if (!response.ok) throw new Error(`Failed to download Excel: ${response.status} ${response.statusText}`);
-    return response.arrayBuffer();
-  }
+  const fs = await import("node:fs/promises");
+  const localFile = await fs.readFile(localFilePath);
+  return localFile.buffer.slice(localFile.byteOffset, localFile.byteOffset + localFile.byteLength);
 }
 
 // ── CSV parser for compare-prices ─────────────────────────────────────────────
