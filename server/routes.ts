@@ -819,6 +819,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         bottleSize: record.bottleSize,
         shelfPrice: record.shelfPrice,
         liquorCode: record.liquorCode,
+        upcCode1: record.upcCode1,
       });
       const addToIndex = (index: Map<string, typeof allLiquorRecords>, key: string | null | undefined, record: typeof allLiquorRecords[number]) => {
         if (!key) return;
@@ -876,8 +877,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
         let matches = recordsByUpc.get(stripExcel(rawUpc).replace(/^0+/, '') || '0') || [];
         let matchedBy: 'upc' | 'code' | null = matches.length > 0 ? 'upc' : null;
-        if (matches.length === 0 && sizeCode) {
-          matches = recordsByCode.get(sizeCode.replace(/^0+/, '') || '0') || [];
+        const embeddedLiquorCode = rawUpc.match(/^[a-f0-9]{64}\|(\d+)$/i)?.[1];
+        const matchCode = embeddedLiquorCode || sizeCode;
+        if (matches.length === 0 && matchCode) {
+          matches = recordsByCode.get(matchCode.replace(/^0+/, '') || '0') || [];
           if (matches.length > 0) matchedBy = 'code';
         }
 
@@ -899,6 +902,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           michiganName: match ? `${match.brandName} ${match.bottleSize}` : null,
           michiganBottleSize: match?.bottleSize ?? null,
           michiganLiquorCode: match?.liquorCode ?? null,
+          michiganUpc: match?.upcCode1 ?? null,
           priceDiff,
         });
       }
