@@ -102,7 +102,11 @@ function buildPtouchCsv(rows: ComparisonRow[], useCustomNames: boolean): string 
       ? row.customName.trim()
       : row.name;
     const dept   = useCustomNames ? (row.department === "Liquor" ? "Liquor 2" : row.department) : "Liquor";
-    const exportUpc = /\|\d+$/.test(row.upc) && row.michiganUpc ? row.michiganUpc : row.upc;
+    const exportUpc = /^\d+$/.test(row.upc)
+      ? normalizeCompareUpc(row.upc)
+      : row.michiganUpc
+        ? normalizeCompareUpc(row.michiganUpc)
+        : row.upc;
     return [
       `"${exportUpc}"`, dept, "1", cents.toString(), "n", "n",
       `"${name}"`, fmtPrice, `"${row.liquorCode}"`,
@@ -121,11 +125,14 @@ function downloadCsv(content: string, filename: string) {
   URL.revokeObjectURL(url);
 }
 
+function normalizeCompareUpc(raw: string): string {
+  const digits = raw.replace(/\D/g, '');
+  if (!digits) return raw;
+  return digits.length > 12 && digits.startsWith('0') ? digits.slice(-12) : digits;
+}
+
 function normalizeBarcode(raw: string): string {
-  const s = raw.replace(/\D/g, '');
-  if (s.length === 14 && s.startsWith('00')) return s.slice(2);
-  if (s.length === 13 && s.startsWith('0'))  return s.slice(1);
-  return s || raw;
+  return normalizeCompareUpc(raw);
 }
 
 function fmtDate(d: string | Date): string {
@@ -552,7 +559,7 @@ useEffect(() => {
       michiganName: `${match.brandName} ${match.bottleSize}`,
       michiganBottleSize: match.bottleSize ?? null,
       michiganLiquorCode: match.liquorCode ?? null,
-      michiganUpc: match.upcCode1 ?? null,
+      michiganUpc: match.upcCode1 ? normalizeCompareUpc(match.upcCode1) : null,
       newPrice: michiganPrice ?? row.registerPrice,
     });
     setDisambigRow(null);
