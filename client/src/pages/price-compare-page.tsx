@@ -735,6 +735,7 @@ useEffect(() => {
   const scanIncreased = scannedIndices.filter(i => rows[i].priceDiff !== null && rows[i].priceDiff! > 0).length;
   const scanDecreased = scannedIndices.filter(i => rows[i].priceDiff !== null && rows[i].priceDiff! < 0).length;
   const scanAmbiguous = scannedIndices.filter(i => rows[i].multipleMatches && !rows[i].resolvedByUser).length;
+  const scanChanged = scannedRowsWithIdx.filter(({ row }) => Math.round((row.newPrice - row.registerPrice) * 100) !== 0).length;
 
   // ── Export helpers ────────────────────────────────────────────────────────
   const doExport = (sourceRows: ComparisonRow[], customNames: boolean, filePrefix: string) => {
@@ -744,8 +745,8 @@ useEffect(() => {
     downloadCsv(csv, `${filePrefix}${suffix}.csv`);
     toast({ title: "Exported!", description: `Downloaded ${sourceRows.length} products.` });
   };
-  const exportChangedOnly = (customNames: boolean, filePrefix: string) => {
-    const changed = rows.filter(r => Math.round((r.newPrice - r.registerPrice) * 100) !== 0);
+  const exportChangedOnly = (customNames: boolean, filePrefix: string, sourceRows: ComparisonRow[] = rows) => {
+    const changed = sourceRows.filter(r => Math.round((r.newPrice - r.registerPrice) * 100) !== 0);
     if (changed.length === 0) { toast({ title: "No price changes" }); return; }
     doExport(changed, customNames, `${filePrefix}_changed`);
   };
@@ -983,6 +984,9 @@ useEffect(() => {
                 <Button variant="outline" size="sm" onClick={() => resetAllToMichigan(scannedRowsWithIdx)} data-testid="button-scan-reset">
                   <RefreshCw className="h-4 w-4 mr-1" />Reset to MI
                 </Button>
+                <Button variant="outline" size="sm" onClick={() => exportChangedOnly(false, "shelf_scan", scannedRowsWithIdx.map(x => x.row))} data-testid="button-scan-export-changed">
+                  <Download className="h-4 w-4 mr-1" />Changed ({scanChanged})
+                </Button>
                 <Button variant="outline" size="sm" onClick={() => doExport(scannedRowsWithIdx.map(x => x.row), false, "shelf_scan")} data-testid="button-scan-export">
                   <Download className="h-4 w-4 mr-1" />Export P-touch
                 </Button>
@@ -1149,6 +1153,9 @@ useEffect(() => {
                 <div className="flex items-center justify-between text-xs text-muted-foreground px-1 flex-wrap gap-2">
                   <span>{scannedIndices.length} item{scannedIndices.length !== 1 ? "s" : ""} in scan list</span>
                   <div className="flex gap-2">
+                    <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => exportChangedOnly(false, "shelf_scan", scannedRowsWithIdx.map(x => x.row))}>
+                      <Download className="h-3 w-3 mr-1" />Changed ({scanChanged})
+                    </Button>
                     <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => doExport(scannedRowsWithIdx.map(x => x.row), false, "shelf_scan")}>
                       <Download className="h-3 w-3 mr-1" />Export P-touch CSV
                     </Button>
