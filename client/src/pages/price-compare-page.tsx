@@ -40,6 +40,7 @@ interface ComparisonRow {
   useCustomName: boolean;
   customName: string;
   priceBookOnly?: boolean;
+  inScanList?: boolean;
 }
 
 interface SessionMeta {
@@ -322,6 +323,7 @@ export default function PriceComparePage() {
     const local = loadLocalSession();
     if (local) {
       setRows(local.rows);
+      setScannedIndices(local.rows.flatMap((row, index) => row.inScanList ? [index] : []));
       setFileName(local.fileName);
     }
 
@@ -338,6 +340,7 @@ export default function PriceComparePage() {
         if (cancelled) return;
         if (session?.rows.length) {
           setRows(session.rows);
+          setScannedIndices(session.rows.flatMap((row, index) => row.inScanList ? [index] : []));
           setFileName(session.fileName);
           setCloudSaved(true);
           if (!local?.rows.length) {
@@ -353,6 +356,7 @@ export default function PriceComparePage() {
       const session = await loadCloudSession(most.id);
       if (cancelled || !session?.rows.length) return;
       setRows(session.rows);
+      setScannedIndices(session.rows.flatMap((row, index) => row.inScanList ? [index] : []));
       setFileName(session.fileName);
       setCurrentSessionId(most.id);
       setCurrentSessionName(most.sessionName);
@@ -415,6 +419,7 @@ useEffect(() => {
       return;
     }
     setRows(session.rows);
+    setScannedIndices(session.rows.flatMap((row, index) => row.inScanList ? [index] : []));
     setFileName(session.fileName);
     setCurrentSessionId(meta.id);
     setCurrentSessionName(meta.sessionName);
@@ -708,6 +713,7 @@ useEffect(() => {
           useCustomName: false,
           customName: productName,
           priceBookOnly: true,
+          inScanList: true,
         };
 
         const newIdx = rows.length;
@@ -733,6 +739,7 @@ useEffect(() => {
       });
       return;
     }
+    setRows(prev => prev.map((row, i) => i === newIdx ? { ...row, inScanList: true } : row));
     setScannedIndices(prev => [newIdx, ...prev]);
     if (rows[newIdx].multipleMatches && rows[newIdx].allMatches?.length) {
       toast({ title: "Added", description: "Multiple products match this barcode. Use Pick match in the row to choose later." });
@@ -741,7 +748,14 @@ useEffect(() => {
     }
   }, [rows, scannedIndices, toast]);
 
-  const removeFromScanList = (origIdx: number) => setScannedIndices(prev => prev.filter(i => i !== origIdx));
+  const removeFromScanList = (origIdx: number) => {
+    setScannedIndices(prev => prev.filter(i => i !== origIdx));
+    setRows(prev => prev.map((row, i) => i === origIdx ? { ...row, inScanList: false } : row));
+  };
+  const clearScanList = () => {
+    setScannedIndices([]);
+    setRows(prev => prev.map(row => row.inScanList ? { ...row, inScanList: false } : row));
+  };
 
   const allScannedRows = scannedIndices.map(i => rows[i]);
   const scannedRowsWithIdx = scannedIndices
@@ -1160,7 +1174,7 @@ useEffect(() => {
               {scannedIndices.length > 0 && (
                 <div className="flex gap-2 flex-wrap">
                   <Input placeholder="Search scanned items…" value={scanSearch} onChange={e => setScanSearch(e.target.value)} className="h-8 w-52 text-sm" />
-                  <Button variant="outline" size="sm" onClick={() => setScannedIndices([])} data-testid="button-scan-clear">
+                  <Button variant="outline" size="sm" onClick={clearScanList} data-testid="button-scan-clear">
                     <Trash2 className="h-4 w-4 mr-1" />Clear list
                   </Button>
                 </div>
