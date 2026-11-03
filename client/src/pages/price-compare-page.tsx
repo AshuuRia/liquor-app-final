@@ -1154,7 +1154,7 @@ useEffect(() => {
                 <div className="flex items-center justify-between text-xs text-muted-foreground px-1 flex-wrap gap-2">
                   <span>{scannedIndices.length} item{scannedIndices.length !== 1 ? "s" : ""} in scan list</span>
                   <div className="flex gap-2">
-                    <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => exportChangedOnly(false, "shelf_scan", scannedRowsWithIdx.map(x => x.row))}>
+                    <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => exportChangedOnly(false, "shelf_scan", allScannedRows)}>
                       <Download className="h-3 w-3 mr-1" />Changed ({scanChanged})
                     </Button>
                     <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => doExport(scannedRowsWithIdx.map(x => x.row), false, "shelf_scan")}>
