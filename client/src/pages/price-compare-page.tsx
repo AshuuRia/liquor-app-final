@@ -560,6 +560,12 @@ useEffect(() => {
       michiganBottleSize: match.bottleSize ?? null,
       michiganLiquorCode: match.liquorCode ?? null,
       michiganUpc: match.upcCode1 ? normalizeCompareUpc(match.upcCode1) : null,
+      ...(row.priceBookOnly ? {
+        name: `${match.brandName} ${match.bottleSize}`,
+        liquorCode: match.liquorCode ?? row.liquorCode,
+        registerPrice: michiganPrice ?? row.registerPrice,
+        priceDiff: null,
+      } : {}),
       newPrice: michiganPrice ?? row.registerPrice,
     });
     setDisambigRow(null);
@@ -707,7 +713,12 @@ useEffect(() => {
         const newIdx = rows.length;
         setRows(prev => [...prev, priceBookRow]);
         setScannedIndices(prev => [newIdx, ...prev]);
-        toast({ title: "Added from price book", description: `${productName} was not in your CSV.` });
+        if (priceBookRow.multipleMatches) {
+          setDisambigRow({ origIdx: newIdx, row: priceBookRow });
+          toast({ title: "Multiple products found", description: "Choose the correct product for this barcode." });
+        } else {
+          toast({ title: "Added from price book", description: `${productName} was not in your CSV.` });
+        }
       } catch (err: any) {
         toast({ variant: "destructive", title: "Not found", description: err.message });
       }
@@ -719,7 +730,12 @@ useEffect(() => {
       return;
     }
     setScannedIndices(prev => [newIdx, ...prev]);
-    toast({ title: "Added", description: rows[newIdx].name });
+    if (rows[newIdx].multipleMatches && rows[newIdx].allMatches?.length) {
+      setDisambigRow({ origIdx: newIdx, row: rows[newIdx] });
+      toast({ title: "Multiple products found", description: "Choose the correct product for this barcode." });
+    } else {
+      toast({ title: "Added", description: rows[newIdx].name });
+    }
   }, [rows, scannedIndices, toast]);
 
   const removeFromScanList = (origIdx: number) => setScannedIndices(prev => prev.filter(i => i !== origIdx));
