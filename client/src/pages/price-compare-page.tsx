@@ -948,6 +948,7 @@ useEffect(() => {
               <tr><td colSpan={showRemove ? 9 : 8} className="px-4 py-8 text-center text-muted-foreground">{emptyLabel}</td></tr>
             )}
             {rowsWithIdx.map(({ row, origIdx }) => {
+              const displayedUpc = row.priceBookOnly ? row.upc : row.michiganUpc || row.upc;
               const needsReview = row.multipleMatches && !row.resolvedByUser;
               const rowBg = needsReview ? "bg-orange-50/60" : !row.matched ? "bg-amber-50/40" : "";
               return (
@@ -966,8 +967,8 @@ useEffect(() => {
                     </div>
                   </td>
                   <td className="px-3 py-2.5 font-mono text-xs text-muted-foreground">
-                    <div className="block max-w-[9rem] truncate" title={row.michiganUpc || row.upc}>
-                      {row.michiganUpc || row.upc}
+                    <div className="block max-w-[9rem] truncate" title={displayedUpc}>
+                      {displayedUpc}
                     </div>
                   </td>
                   <td className="px-3 py-2.5 font-mono text-xs text-muted-foreground whitespace-nowrap">{row.michiganLiquorCode || row.liquorCode || "—"}</td>
