@@ -577,12 +577,18 @@ useEffect(() => {
   };
 
   const openPickMatch = async (origIdx: number, row: ComparisonRow) => {
-    if (row.allMatches?.length) {
+    if (row.allMatches?.length && !row.priceBookOnly) {
       setDisambigRow({ origIdx, row });
       return;
     }
 
-    const lookup = row.upc || row.michiganLiquorCode || row.liquorCode || row.name;
+    // A price-book-only scan can resolve to an accessory/bundle UPC even when
+    // the normal bottle is a separate Michigan record. Search the base brand so
+    // the user can choose the right size or package from the row.
+    const baseProductName = row.name.split(/\\s+W\\//i)[0].trim();
+    const lookup = row.priceBookOnly
+      ? (baseProductName || row.name)
+      : row.upc || row.michiganLiquorCode || row.liquorCode || row.name;
     if (!lookup) {
       toast({ variant: "destructive", title: "No match options", description: "This row does not have a UPC, liquor code, or name to look up." });
       return;
@@ -868,7 +874,7 @@ useEffect(() => {
               <tr><td colSpan={showRemove ? 9 : 8} className="px-4 py-8 text-center text-muted-foreground">{emptyLabel}</td></tr>
             )}
             {rowsWithIdx.map(({ row, origIdx }) => {
-              const needsReview = row.multipleMatches && !row.resolvedByUser;
+              const needsReview = (row.multipleMatches || row.priceBookOnly) && !row.resolvedByUser;
               const rowBg = needsReview ? "bg-orange-50/60" : !row.matched ? "bg-amber-50/40" : "";
               return (
                 <tr key={origIdx} className={`hover:bg-muted/30 transition-colors ${rowBg}`}>
@@ -1301,11 +1307,11 @@ useEffect(() => {
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <HelpCircle className="h-5 w-5 text-orange-500" />
-              Multiple Michigan records for this UPC
+              Choose the correct Michigan product
             </DialogTitle>
             <DialogDescription>
-              UPC <span className="font-mono">{disambigRow?.row.upc}</span> matches{" "}
-              {disambigRow?.row.allMatches?.length ?? 0} products. Pick the one that matches <strong>{disambigRow?.row.name}</strong>.
+              UPC <span className="font-mono">{disambigRow?.row.upc}</span> currently points to{" "}
+              <strong>{disambigRow?.row.name}</strong>. Pick the price-book product that matches the bottle you scanned.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-2 max-h-[60vh] overflow-y-auto pr-1">
