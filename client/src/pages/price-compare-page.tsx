@@ -812,12 +812,16 @@ useEffect(() => {
           [product.upcCode1, product.upcCode2]
             .filter((upc): upc is string => !!upc)
             .some(upc => normalizeBarcode(upc) === norm)
+          && (!rows[newIdx].michiganBottleSize || normalizeBottleSize(product.bottleSize) === normalizeBottleSize(rows[newIdx].michiganBottleSize))
         );
-        if (duplicateMatches.length > 1) {
-          setRows(prev => prev.map((row, i) => i === newIdx
-            ? { ...row, multipleMatches: true, allMatches: duplicateMatches, inScanList: true }
-            : row));
-        }
+        setRows(prev => prev.map((row, i) => i === newIdx
+          ? {
+              ...row,
+              multipleMatches: duplicateMatches.length > 1,
+              allMatches: duplicateMatches.length > 1 ? duplicateMatches : undefined,
+              inScanList: true,
+            }
+          : row));
       } catch {
         // Keep scanning usable if the optional ambiguity lookup is unavailable.
       }
