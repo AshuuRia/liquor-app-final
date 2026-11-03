@@ -423,7 +423,6 @@ useEffect(() => {
     setFileName(session.fileName);
     setCurrentSessionId(meta.id);
     setCurrentSessionName(meta.sessionName);
-    setScannedIndices([]);
     setFilter("all");
     setSessionsOpen(false);
     saveLocalSession(session.fileName, session.rows);
