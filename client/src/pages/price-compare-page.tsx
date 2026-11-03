@@ -726,7 +726,7 @@ useEffect(() => {
     const newIdx = matchingIndices[0];
     if (scannedIndices.includes(newIdx)) {
       toast({
-        title: rows[newIdx].multipleMatches && rows[newIdx].allMatches?.length ? "Already in scan list" : "Already in scan list",
+        title: "Already in scan list",
         description: rows[newIdx].multipleMatches && rows[newIdx].allMatches?.length
           ? `${rows[newIdx].name} is already on the list. Use Pick match in the row to choose a product.`
           : `${rows[newIdx].name} is already on the list.`,
