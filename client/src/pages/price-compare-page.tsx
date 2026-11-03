@@ -136,6 +136,11 @@ function normalizeBarcode(raw: string): string {
   return normalizeCompareUpc(raw);
 }
 
+function normalizeLiquorCode(raw: string | null | undefined): string {
+  const code = String(raw ?? '').trim();
+  return code.replace(/^0+/, '') || (code ? '0' : '');
+}
+
 function normalizeProductLabel(raw: string): string {
   return raw.toUpperCase().replace(/[^A-Z0-9]+/g, ' ').trim();
 }
@@ -766,6 +771,45 @@ useEffect(() => {
         const uniqueMatchOptions = Array.from(new Map(
           matchOptions.map(candidate => [candidate.liquorCode || candidate.id, candidate])
         ).values());
+
+        // NRS exports can contain an unusable UPC while keeping the Michigan
+        // liquor code in the CSV "size" column. Resolve the scanned UPC through
+        // the price book, then link that result back to the imported CSV row by code.
+        const scannedLiquorCode = normalizeLiquorCode(product.liquorCode);
+        const csvMatchIdx = scannedLiquorCode
+          ? rows.findIndex(row => !row.priceBookOnly && normalizeLiquorCode(row.liquorCode) === scannedLiquorCode)
+          : -1;
+        if (csvMatchIdx >= 0) {
+          const csvRow = rows[csvMatchIdx];
+          const michiganPrice = product.shelfPrice ?? null;
+          const priceDiff = michiganPrice !== null
+            ? Math.round((michiganPrice - csvRow.registerPrice) * 100) / 100
+            : null;
+          setRows(prev => prev.map((row, index) => index === csvMatchIdx
+            ? {
+                ...row,
+                matched: true,
+                matchedBy: 'code',
+                multipleMatches: uniqueMatchOptions.length > 1,
+                allMatches: uniqueMatchOptions.length > 1 ? uniqueMatchOptions : undefined,
+                resolvedByUser: false,
+                michiganPrice,
+                michiganName: productName,
+                michiganBottleSize: product.bottleSize ?? null,
+                michiganLiquorCode: product.liquorCode ?? null,
+                michiganUpc: product.upcCode1 ? normalizeCompareUpc(product.upcCode1) : null,
+                priceDiff,
+                inScanList: true,
+              }
+            : row));
+          setScannedIndices(prev => prev.includes(csvMatchIdx) ? prev : [csvMatchIdx, ...prev]);
+          toast({
+            title: "Matched CSV item by liquor code",
+            description: productName + " was linked to its CSV row using liquor code " + product.liquorCode + ".",
+          });
+          return;
+        }
+
         const hasAlternatives = uniqueMatchOptions.length > 1;
         const priceBookRow: ComparisonRow = {
           upc: barcode,
