@@ -731,21 +731,20 @@ useEffect(() => {
     const newIdx = matchingIndices[0];
 
     // A CSV UPC match can hide duplicate Michigan records because the price-book
-    // lookup used to run only when the UPC was absent from the CSV. Check the
-    // price book too, then keep the choices on the row for later review.
+    // lookup used to run only when the UPC was absent from the CSV. Search the
+    // public price-book endpoint and keep exact UPC matches on the row for later.
     let duplicateMatches = rows[newIdx].allMatches || [];
-    if (!rows[newIdx].multipleMatches) {
+    if (!rows[newIdx].allMatches?.length) {
       try {
-        const authHeaders = await getAuthHeaders();
-        const res = await fetch("/api/scan-barcode", {
-          method: "POST",
-          headers: { "Content-Type": "application/json", ...authHeaders },
-          credentials: "include",
-          body: JSON.stringify({ barcode }),
-        });
+        const res = await fetch(`/api/search-liquor?query=${encodeURIComponent(barcode)}`, { credentials: "include" });
         const data = await res.json().catch(() => null);
-        if (res.ok && data?.success && data.requiresSelection && data.matchedProducts?.length > 1) {
-          duplicateMatches = data.matchedProducts as LiquorRecord[];
+        const candidates = (data?.results || []) as LiquorRecord[];
+        duplicateMatches = candidates.filter(product =>
+          [product.upcCode1, product.upcCode2]
+            .filter((upc): upc is string => !!upc)
+            .some(upc => normalizeBarcode(upc) === norm)
+        );
+        if (duplicateMatches.length > 1) {
           setRows(prev => prev.map((row, i) => i === newIdx
             ? { ...row, multipleMatches: true, allMatches: duplicateMatches, inScanList: true }
             : row));
