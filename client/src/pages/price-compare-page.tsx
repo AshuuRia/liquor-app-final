@@ -148,11 +148,18 @@ function getBasePackageBrand(raw: string): string {
   return raw.split(/\s+W\//i)[0].trim();
 }
 
-function isSameBrandPackage(candidate: LiquorRecord, baseBrand: string, bottleSize: string | null | undefined): boolean {
+function isRelevantPackageAlternative(
+  candidate: LiquorRecord,
+  baseBrand: string,
+  bottleSize: string | null | undefined,
+  scannedLiquorCode: string | null | undefined,
+): boolean {
   const candidateBrand = normalizeProductLabel(candidate.brandName);
   const normalizedBase = normalizeProductLabel(baseBrand);
-  const sameBrandOrBundle = candidateBrand === normalizedBase || candidateBrand.startsWith(`${normalizedBase} W `);
-  return sameBrandOrBundle && normalizeBottleSize(candidate.bottleSize) === normalizeBottleSize(bottleSize);
+  const isScannedPackage = !!scannedLiquorCode && candidate.liquorCode === scannedLiquorCode;
+  const isRegularBaseProduct = candidateBrand === normalizedBase;
+  return (isScannedPackage || isRegularBaseProduct)
+    && normalizeBottleSize(candidate.bottleSize) === normalizeBottleSize(bottleSize);
 }
 
 function fmtDate(d: string | Date): string {
@@ -599,7 +606,7 @@ useEffect(() => {
     const baseProductName = getBasePackageBrand(row.name);
     const storedMatches = (row.allMatches || []).filter(candidate =>
       row.priceBookOnly
-        ? isSameBrandPackage(candidate, baseProductName, row.michiganBottleSize)
+        ? isRelevantPackageAlternative(candidate, baseProductName, row.michiganBottleSize, row.michiganLiquorCode || row.liquorCode)
         : !row.michiganBottleSize || normalizeBottleSize(candidate.bottleSize) === normalizeBottleSize(row.michiganBottleSize)
     );
     if (storedMatches.length > 1) {
@@ -610,7 +617,7 @@ useEffect(() => {
     }
 
     // For bundle rows search the base brand, then limit choices to the same
-    // bottle size and exact base brand or its W/ package variants. For regular
+    // bottle size, the scanned package, or the exact base-brand product. For regular
     // rows, retain only exact UPC matches.
     const lookup = row.priceBookOnly
       ? (baseProductName || row.name)
@@ -627,7 +634,7 @@ useEffect(() => {
 
       const candidates = (data.results || []) as LiquorRecord[];
       const matches = row.priceBookOnly
-        ? candidates.filter(candidate => isSameBrandPackage(candidate, baseProductName, row.michiganBottleSize))
+        ? candidates.filter(candidate => isRelevantPackageAlternative(candidate, baseProductName, row.michiganBottleSize, row.michiganLiquorCode || row.liquorCode))
         : candidates.filter(candidate =>
             [candidate.upcCode1, candidate.upcCode2]
               .filter((upc): upc is string => !!upc)
@@ -749,7 +756,7 @@ useEffect(() => {
             const matchRes = await fetch(`/api/search-liquor?query=${encodeURIComponent(baseBrand)}`, { credentials: "include" });
             const matchData = await matchRes.json().catch(() => null);
             const related = ((matchData?.results || []) as LiquorRecord[])
-              .filter(candidate => isSameBrandPackage(candidate, baseBrand, product.bottleSize));
+              .filter(candidate => isRelevantPackageAlternative(candidate, baseBrand, product.bottleSize, product.liquorCode));
             matchOptions = [product, ...related];
           } catch {
             matchOptions = [product];
