@@ -714,8 +714,7 @@ useEffect(() => {
         setRows(prev => [...prev, priceBookRow]);
         setScannedIndices(prev => [newIdx, ...prev]);
         if (priceBookRow.multipleMatches) {
-          setDisambigRow({ origIdx: newIdx, row: priceBookRow });
-          toast({ title: "Multiple products found", description: "Choose the correct product for this barcode." });
+          toast({ title: "Added from price book", description: "Multiple products match this barcode. Use Pick match in the row to choose later." });
         } else {
           toast({ title: "Added from price book", description: `${productName} was not in your CSV.` });
         }
@@ -726,18 +725,17 @@ useEffect(() => {
     }
     const newIdx = matchingIndices[0];
     if (scannedIndices.includes(newIdx)) {
-      if (rows[newIdx].multipleMatches && rows[newIdx].allMatches?.length) {
-        setDisambigRow({ origIdx: newIdx, row: rows[newIdx] });
-        toast({ title: "Multiple products found", description: "Choose the correct product for this barcode." });
-      } else {
-        toast({ title: "Already in scan list", description: `${rows[newIdx].name} is already on the list.` });
-      }
+      toast({
+        title: rows[newIdx].multipleMatches && rows[newIdx].allMatches?.length ? "Already in scan list" : "Already in scan list",
+        description: rows[newIdx].multipleMatches && rows[newIdx].allMatches?.length
+          ? `${rows[newIdx].name} is already on the list. Use Pick match in the row to choose a product.`
+          : `${rows[newIdx].name} is already on the list.`,
+      });
       return;
     }
     setScannedIndices(prev => [newIdx, ...prev]);
     if (rows[newIdx].multipleMatches && rows[newIdx].allMatches?.length) {
-      setDisambigRow({ origIdx: newIdx, row: rows[newIdx] });
-      toast({ title: "Multiple products found", description: "Choose the correct product for this barcode." });
+      toast({ title: "Added", description: "Multiple products match this barcode. Use Pick match in the row to choose later." });
     } else {
       toast({ title: "Added", description: rows[newIdx].name });
     }
