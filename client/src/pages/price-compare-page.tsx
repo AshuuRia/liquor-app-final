@@ -136,6 +136,25 @@ function normalizeBarcode(raw: string): string {
   return normalizeCompareUpc(raw);
 }
 
+function normalizeProductLabel(raw: string): string {
+  return raw.toUpperCase().replace(/[^A-Z0-9]+/g, ' ').trim();
+}
+
+function normalizeBottleSize(raw: string | null | undefined): string {
+  return (raw || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+}
+
+function getBasePackageBrand(raw: string): string {
+  return raw.split(/\s+W\//i)[0].trim();
+}
+
+function isSameBrandPackage(candidate: LiquorRecord, baseBrand: string, bottleSize: string | null | undefined): boolean {
+  const candidateBrand = normalizeProductLabel(candidate.brandName);
+  const normalizedBase = normalizeProductLabel(baseBrand);
+  const sameBrandOrBundle = candidateBrand === normalizedBase || candidateBrand.startsWith(`${normalizedBase} W `);
+  return sameBrandOrBundle && normalizeBottleSize(candidate.bottleSize) === normalizeBottleSize(bottleSize);
+}
+
 function fmtDate(d: string | Date): string {
   try {
     return new Date(d).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
@@ -577,15 +596,15 @@ useEffect(() => {
   };
 
   const openPickMatch = async (origIdx: number, row: ComparisonRow) => {
-    if (row.allMatches?.length && !row.priceBookOnly) {
+    if (row.allMatches?.length > 1) {
       setDisambigRow({ origIdx, row });
       return;
     }
 
-    // A price-book-only scan can resolve to an accessory/bundle UPC even when
-    // the normal bottle is a separate Michigan record. Search the base brand so
-    // the user can choose the right size or package from the row.
-    const baseProductName = row.name.split(/\s+W\//i)[0].trim();
+    // For bundle rows search the base brand, then limit choices to the same
+    // bottle size and exact base brand or its W/ package variants. For regular
+    // rows, retain only exact UPC matches.
+    const baseProductName = getBasePackageBrand(row.name);
     const lookup = row.priceBookOnly
       ? (baseProductName || row.name)
       : row.upc || row.michiganLiquorCode || row.liquorCode || row.name;
@@ -599,14 +618,24 @@ useEffect(() => {
       const data = await res.json().catch(() => null);
       if (!res.ok || !data?.success) throw new Error(data?.error || "Could not load match options.");
 
-      const matches = (data.results || []) as LiquorRecord[];
-      if (matches.length === 0) {
-        toast({ variant: "destructive", title: "No match options", description: `No Michigan price book records were found for ${lookup}.` });
+      const candidates = (data.results || []) as LiquorRecord[];
+      const matches = row.priceBookOnly
+        ? candidates.filter(candidate => isSameBrandPackage(candidate, baseProductName, row.michiganBottleSize))
+        : candidates.filter(candidate =>
+            [candidate.upcCode1, candidate.upcCode2]
+              .filter((upc): upc is string => !!upc)
+              .some(upc => normalizeBarcode(upc) === normalizeBarcode(row.upc))
+            && (!row.michiganBottleSize || normalizeBottleSize(candidate.bottleSize) === normalizeBottleSize(row.michiganBottleSize))
+          );
+
+      if (matches.length <= 1) {
+        updateRow(origIdx, { multipleMatches: false, allMatches: undefined });
+        toast({ title: "No alternate matches", description: "There are no other same-size Michigan products to choose from for this item." });
         return;
       }
 
-      const hydratedRow = { ...row, allMatches: matches, multipleMatches: matches.length > 1 };
-      updateRow(origIdx, { allMatches: matches, multipleMatches: matches.length > 1 });
+      const hydratedRow = { ...row, allMatches: matches, multipleMatches: true };
+      updateRow(origIdx, { allMatches: matches, multipleMatches: true });
       setDisambigRow({ origIdx, row: hydratedRow });
     } catch (err: any) {
       toast({ variant: "destructive", title: "Could not load match options", description: err?.message || "Try refreshing the Michigan data and uploading the CSV again." });
@@ -697,6 +726,33 @@ useEffect(() => {
 
         const productName = `${product.brandName} ${product.bottleSize || ''}`.trim();
         const shelfPrice = product.shelfPrice ?? 0;
+        let matchOptions: LiquorRecord[] = [];
+
+        if (data.requiresSelection && Array.isArray(data.matchedProducts)) {
+          // Keep true barcode collisions, but discard different bottle sizes.
+          matchOptions = data.matchedProducts.filter((candidate: LiquorRecord) =>
+            normalizeBottleSize(candidate.bottleSize) === normalizeBottleSize(product.bottleSize)
+          );
+        } else {
+          // Some bundle UPCs resolve to only the bundle record. Offer a narrow
+          // same-brand, same-size choice (bundle vs regular bottle), not every
+          // size and flavor returned by a broad brand search.
+          const baseBrand = getBasePackageBrand(product.brandName);
+          try {
+            const matchRes = await fetch(`/api/search-liquor?query=${encodeURIComponent(baseBrand)}`, { credentials: "include" });
+            const matchData = await matchRes.json().catch(() => null);
+            const related = ((matchData?.results || []) as LiquorRecord[])
+              .filter(candidate => isSameBrandPackage(candidate, baseBrand, product.bottleSize));
+            matchOptions = [product, ...related];
+          } catch {
+            matchOptions = [product];
+          }
+        }
+
+        const uniqueMatchOptions = Array.from(new Map(
+          matchOptions.map(candidate => [candidate.liquorCode || candidate.id, candidate])
+        ).values());
+        const hasAlternatives = uniqueMatchOptions.length > 1;
         const priceBookRow: ComparisonRow = {
           upc: barcode,
           name: productName,
@@ -705,8 +761,8 @@ useEffect(() => {
           liquorCode: product.liquorCode || '',
           matched: true,
           matchedBy: 'upc',
-          multipleMatches: !!data.requiresSelection,
-          allMatches: data.requiresSelection ? data.matchedProducts : undefined,
+          multipleMatches: hasAlternatives,
+          allMatches: hasAlternatives ? uniqueMatchOptions : undefined,
           resolvedByUser: false,
           michiganPrice: product.shelfPrice ?? null,
           michiganName: productName,
@@ -874,7 +930,7 @@ useEffect(() => {
               <tr><td colSpan={showRemove ? 9 : 8} className="px-4 py-8 text-center text-muted-foreground">{emptyLabel}</td></tr>
             )}
             {rowsWithIdx.map(({ row, origIdx }) => {
-              const needsReview = (row.multipleMatches || row.priceBookOnly) && !row.resolvedByUser;
+              const needsReview = row.multipleMatches && !row.resolvedByUser;
               const rowBg = needsReview ? "bg-orange-50/60" : !row.matched ? "bg-amber-50/40" : "";
               return (
                 <tr key={origIdx} className={`hover:bg-muted/30 transition-colors ${rowBg}`}>
