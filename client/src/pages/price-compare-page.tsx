@@ -596,15 +596,22 @@ useEffect(() => {
   };
 
   const openPickMatch = async (origIdx: number, row: ComparisonRow) => {
-    if (row.allMatches?.length > 1) {
-      setDisambigRow({ origIdx, row });
+    const baseProductName = getBasePackageBrand(row.name);
+    const storedMatches = (row.allMatches || []).filter(candidate =>
+      row.priceBookOnly
+        ? isSameBrandPackage(candidate, baseProductName, row.michiganBottleSize)
+        : !row.michiganBottleSize || normalizeBottleSize(candidate.bottleSize) === normalizeBottleSize(row.michiganBottleSize)
+    );
+    if (storedMatches.length > 1) {
+      const filteredRow = { ...row, allMatches: storedMatches, multipleMatches: true };
+      updateRow(origIdx, { allMatches: storedMatches, multipleMatches: true });
+      setDisambigRow({ origIdx, row: filteredRow });
       return;
     }
 
     // For bundle rows search the base brand, then limit choices to the same
     // bottle size and exact base brand or its W/ package variants. For regular
     // rows, retain only exact UPC matches.
-    const baseProductName = getBasePackageBrand(row.name);
     const lookup = row.priceBookOnly
       ? (baseProductName || row.name)
       : row.upc || row.michiganLiquorCode || row.liquorCode || row.name;
