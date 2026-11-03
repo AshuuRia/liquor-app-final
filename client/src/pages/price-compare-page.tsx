@@ -726,7 +726,12 @@ useEffect(() => {
     }
     const newIdx = matchingIndices[0];
     if (scannedIndices.includes(newIdx)) {
-      toast({ title: "Already in scan list", description: `${rows[newIdx].name} is already on the list.` });
+      if (rows[newIdx].multipleMatches && rows[newIdx].allMatches?.length) {
+        setDisambigRow({ origIdx: newIdx, row: rows[newIdx] });
+        toast({ title: "Multiple products found", description: "Choose the correct product for this barcode." });
+      } else {
+        toast({ title: "Already in scan list", description: `${rows[newIdx].name} is already on the list.` });
+      }
       return;
     }
     setScannedIndices(prev => [newIdx, ...prev]);
