@@ -724,6 +724,7 @@ useEffect(() => {
 
   const removeFromScanList = (origIdx: number) => setScannedIndices(prev => prev.filter(i => i !== origIdx));
 
+  const allScannedRows = scannedIndices.map(i => rows[i]);
   const scannedRowsWithIdx = scannedIndices
     .map(i => ({ row: rows[i], origIdx: i }))
     .filter(({ row: r }) => {
@@ -735,7 +736,7 @@ useEffect(() => {
   const scanIncreased = scannedIndices.filter(i => rows[i].priceDiff !== null && rows[i].priceDiff! > 0).length;
   const scanDecreased = scannedIndices.filter(i => rows[i].priceDiff !== null && rows[i].priceDiff! < 0).length;
   const scanAmbiguous = scannedIndices.filter(i => rows[i].multipleMatches && !rows[i].resolvedByUser).length;
-  const scanChanged = scannedRowsWithIdx.filter(({ row }) => Math.round((row.newPrice - row.registerPrice) * 100) !== 0).length;
+  const scanChanged = allScannedRows.filter(row => Math.round((row.newPrice - row.registerPrice) * 100) !== 0).length;
 
   // ── Export helpers ────────────────────────────────────────────────────────
   const doExport = (sourceRows: ComparisonRow[], customNames: boolean, filePrefix: string) => {
@@ -984,7 +985,7 @@ useEffect(() => {
                 <Button variant="outline" size="sm" onClick={() => resetAllToMichigan(scannedRowsWithIdx)} data-testid="button-scan-reset">
                   <RefreshCw className="h-4 w-4 mr-1" />Reset to MI
                 </Button>
-                <Button variant="outline" size="sm" onClick={() => exportChangedOnly(false, "shelf_scan", scannedRowsWithIdx.map(x => x.row))} data-testid="button-scan-export-changed">
+                <Button variant="outline" size="sm" onClick={() => exportChangedOnly(false, "shelf_scan", allScannedRows)} data-testid="button-scan-export-changed">
                   <Download className="h-4 w-4 mr-1" />Changed ({scanChanged})
                 </Button>
                 <Button variant="outline" size="sm" onClick={() => doExport(scannedRowsWithIdx.map(x => x.row), false, "shelf_scan")} data-testid="button-scan-export">
