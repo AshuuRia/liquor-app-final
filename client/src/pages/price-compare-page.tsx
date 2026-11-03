@@ -585,7 +585,7 @@ useEffect(() => {
     // A price-book-only scan can resolve to an accessory/bundle UPC even when
     // the normal bottle is a separate Michigan record. Search the base brand so
     // the user can choose the right size or package from the row.
-    const baseProductName = row.name.split(/\\s+W\\//i)[0].trim();
+    const baseProductName = row.name.split(/\s+W\//i)[0].trim();
     const lookup = row.priceBookOnly
       ? (baseProductName || row.name)
       : row.upc || row.michiganLiquorCode || row.liquorCode || row.name;
