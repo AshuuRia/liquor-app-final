@@ -729,19 +729,45 @@ useEffect(() => {
       return;
     }
     const newIdx = matchingIndices[0];
-    if (scannedIndices.includes(newIdx)) {
-      toast({
-        title: "Already in scan list",
-        description: rows[newIdx].multipleMatches && rows[newIdx].allMatches?.length
-          ? `${rows[newIdx].name} is already on the list. Use Pick match in the row to choose a product.`
-          : `${rows[newIdx].name} is already on the list.`,
-      });
-      return;
+
+    // A CSV UPC match can hide duplicate Michigan records because the price-book
+    // lookup used to run only when the UPC was absent from the CSV. Check the
+    // price book too, then keep the choices on the row for later review.
+    let duplicateMatches = rows[newIdx].allMatches || [];
+    if (!rows[newIdx].multipleMatches) {
+      try {
+        const authHeaders = await getAuthHeaders();
+        const res = await fetch("/api/scan-barcode", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...authHeaders },
+          credentials: "include",
+          body: JSON.stringify({ barcode }),
+        });
+        const data = await res.json().catch(() => null);
+        if (res.ok && data?.success && data.requiresSelection && data.matchedProducts?.length > 1) {
+          duplicateMatches = data.matchedProducts as LiquorRecord[];
+          setRows(prev => prev.map((row, i) => i === newIdx
+            ? { ...row, multipleMatches: true, allMatches: duplicateMatches, inScanList: true }
+            : row));
+        }
+      } catch {
+        // Keep scanning usable if the optional ambiguity lookup is unavailable.
+      }
     }
-    setRows(prev => prev.map((row, i) => i === newIdx ? { ...row, inScanList: true } : row));
-    setScannedIndices(prev => [newIdx, ...prev]);
-    if (rows[newIdx].multipleMatches && rows[newIdx].allMatches?.length) {
-      toast({ title: "Added", description: "Multiple products match this barcode. Use Pick match in the row to choose later." });
+
+    const alreadyScanned = scannedIndices.includes(newIdx);
+    if (!alreadyScanned) {
+      setRows(prev => prev.map((row, i) => i === newIdx ? { ...row, inScanList: true } : row));
+      setScannedIndices(prev => [newIdx, ...prev]);
+    }
+
+    if (duplicateMatches.length > 1 || rows[newIdx].multipleMatches) {
+      toast({
+        title: alreadyScanned ? "Already in scan list" : "Added",
+        description: "Multiple products match this barcode. Use Pick match in the row to choose later.",
+      });
+    } else if (alreadyScanned) {
+      toast({ title: "Already in scan list", description: `${rows[newIdx].name} is already on the list.` });
     } else {
       toast({ title: "Added", description: rows[newIdx].name });
     }
