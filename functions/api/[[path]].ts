@@ -778,16 +778,15 @@ app.post('/compare-prices', requireAuth, async (c) => {
     const dbCount = await storage.getLiquorRecordCount();
     if (!dbCount) return c.json({ success: true, rows: [], totalRows: 0, dbEmpty: true });
 
-    const allLiquorRecords = await storage.getLiquorRecords();
-    const recordsByUpc = new Map<string, typeof allLiquorRecords>();
-    const recordsByCode = new Map<string, typeof allLiquorRecords>();
+    const recordsByUpc = new Map<string, any[]>();
+    const recordsByCode = new Map<string, any[]>();
     const normalizeCompareUpc = (value: string | null | undefined): string => {
       if (!value) return '';
       const digits = value.replace(/\D/g, '');
       if (!digits) return '';
       return digits.length > 12 && digits.startsWith('0') ? digits.slice(-12) : digits;
     };
-    const toClientMatch = (record: typeof allLiquorRecords[number]) => ({
+    const toClientMatch = (record: any) => ({
       id: record.id,
       brandName: record.brandName,
       bottleSize: record.bottleSize,
@@ -795,7 +794,7 @@ app.post('/compare-prices', requireAuth, async (c) => {
       liquorCode: record.liquorCode,
       upcCode1: record.upcCode1 ? normalizeCompareUpc(record.upcCode1) : null,
     });
-    const addToIndex = (index: Map<string, typeof allLiquorRecords>, key: string | null | undefined, record: typeof allLiquorRecords[number], normalize = normalizeUpc) => {
+    const addToIndex = (index: Map<string, any[]>, key: string | null | undefined, record: any, normalize = normalizeUpc) => {
       if (!key) return;
       const normalized = normalize(key);
       if (!normalized || normalized === '0') return;
@@ -803,12 +802,6 @@ app.post('/compare-prices', requireAuth, async (c) => {
       if (matches) matches.push(record);
       else index.set(normalized, [record]);
     };
-    for (const record of allLiquorRecords) {
-      addToIndex(recordsByUpc, record.upcCode1, record, normalizeCompareUpc);
-      addToIndex(recordsByUpc, record.upcCode2, record, normalizeCompareUpc);
-      addToIndex(recordsByCode, record.liquorCode, record);
-    }
-
     function parseCsvLine(line: string): string[] {
       const fields: string[] = [];
       let cur = '', inQ = false;
@@ -846,11 +839,29 @@ app.post('/compare-prices', requireAuth, async (c) => {
       return c.json({ success: false, error: 'CSV missing UPC/barcode or product name columns' }, 400);
     }
 
+    // Index only records that can match this upload. Loading the entire Michigan
+    // price book into a Pages Worker exceeded Cloudflare's memory/resource limits.
+    const strip = (value: string) => value.replace(/[="]/g, '').trim();
+    const requestedUpcs = new Set<string>();
+    const requestedCodes = new Set<string>();
+    for (let i = 1; i < lines.length; i++) {
+      const fields = parseCsvLine(lines[i]);
+      const rawUpc = strip((fields[upcIdx] || '').trim());
+      const sizeCode = strip(sizeIdx >= 0 ? (fields[sizeIdx] || '').trim() : '');
+      if (/^\\d+$/.test(rawUpc)) requestedUpcs.add(normalizeCompareUpc(rawUpc));
+      else if (sizeCode) requestedCodes.add(normalizeUpc(sizeCode));
+    }
+    const relevantRecords = await storage.findLiquorRecordsForCompare([...requestedUpcs], [...requestedCodes]);
+    for (const record of relevantRecords) {
+      addToIndex(recordsByUpc, record.upcCode1, record, normalizeCompareUpc);
+      addToIndex(recordsByUpc, record.upcCode2, record, normalizeCompareUpc);
+      addToIndex(recordsByCode, record.liquorCode, record);
+    }
+
     const rows = [];
     for (let i = 1; i < lines.length; i++) {
       const fields = parseCsvLine(lines[i]);
       if (fields.length < 2) continue;
-      const strip = (v: string) => v.replace(/[="]/g, '').trim();
       const rawUpc = strip((fields[upcIdx] || '').trim());
       const rawName = (fields[nameIdx] || '').trim();
       const rawPrice = priceIdx >= 0 ? (fields[priceIdx] || '').trim() : '';
