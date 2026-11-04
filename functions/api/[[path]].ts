@@ -848,7 +848,7 @@ app.post('/compare-prices', requireAuth, async (c) => {
       const fields = parseCsvLine(lines[i]);
       const rawUpc = strip((fields[upcIdx] || '').trim());
       const sizeCode = strip(sizeIdx >= 0 ? (fields[sizeIdx] || '').trim() : '');
-      if (/^\\d+$/.test(rawUpc)) requestedUpcs.add(normalizeCompareUpc(rawUpc));
+      if (/^\d+$/.test(rawUpc)) requestedUpcs.add(normalizeCompareUpc(rawUpc));
       else if (sizeCode) requestedCodes.add(normalizeUpc(sizeCode));
     }
     const relevantRecords = await storage.findLiquorRecordsForCompare([...requestedUpcs], [...requestedCodes]);
