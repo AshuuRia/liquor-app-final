@@ -34,11 +34,13 @@ interface ComparisonRow {
   michiganName: string | null;
   michiganBottleSize: string | null;
   michiganLiquorCode: string | null;
+  michiganUpc?: string | null;
   priceDiff: number | null;
   newPrice: number;
   useCustomName: boolean;
   customName: string;
   priceBookOnly?: boolean;
+  inScanList?: boolean;
 }
 
 interface SessionMeta {
@@ -101,8 +103,13 @@ function buildPtouchCsv(rows: ComparisonRow[], useCustomNames: boolean): string 
       ? row.customName.trim()
       : row.name;
     const dept   = useCustomNames ? (row.department === "Liquor" ? "Liquor 2" : row.department) : "Liquor";
+    const exportUpc = /^\d+$/.test(row.upc)
+      ? normalizeCompareUpc(row.upc)
+      : row.michiganUpc
+        ? normalizeCompareUpc(row.michiganUpc)
+        : row.upc;
     return [
-      `"${row.upc}"`, dept, "1", cents.toString(), "n", "n",
+      `"${exportUpc}"`, dept, "1", cents.toString(), "n", "n",
       `"${name}"`, fmtPrice, `"${row.liquorCode}"`,
       "", "n", "1", "1", "0", "n", "", `"=""0"""`,
       "", "", "", "", "", "n", "", "", "", "", "", "", ""
@@ -119,11 +126,45 @@ function downloadCsv(content: string, filename: string) {
   URL.revokeObjectURL(url);
 }
 
+function normalizeCompareUpc(raw: string): string {
+  const digits = raw.replace(/\D/g, '');
+  if (!digits) return raw;
+  return digits.length > 12 && digits.startsWith('0') ? digits.slice(-12) : digits;
+}
+
 function normalizeBarcode(raw: string): string {
-  const s = raw.replace(/\D/g, '');
-  if (s.length === 14 && s.startsWith('00')) return s.slice(2);
-  if (s.length === 13 && s.startsWith('0'))  return s.slice(1);
-  return s || raw;
+  return normalizeCompareUpc(raw);
+}
+
+function normalizeLiquorCode(raw: string | null | undefined): string {
+  const code = String(raw ?? '').trim();
+  return code.replace(/^0+/, '') || (code ? '0' : '');
+}
+
+function normalizeProductLabel(raw: string): string {
+  return raw.toUpperCase().replace(/[^A-Z0-9]+/g, ' ').trim();
+}
+
+function normalizeBottleSize(raw: string | null | undefined): string {
+  return (raw || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+}
+
+function getBasePackageBrand(raw: string): string {
+  return raw.split(/\s+W\//i)[0].trim();
+}
+
+function isRelevantPackageAlternative(
+  candidate: LiquorRecord,
+  baseBrand: string,
+  bottleSize: string | null | undefined,
+  scannedLiquorCode: string | null | undefined,
+): boolean {
+  const candidateBrand = normalizeProductLabel(candidate.brandName);
+  const normalizedBase = normalizeProductLabel(baseBrand);
+  const isScannedPackage = !!scannedLiquorCode && candidate.liquorCode === scannedLiquorCode;
+  const isRegularBaseProduct = candidateBrand === normalizedBase;
+  return (isScannedPackage || isRegularBaseProduct)
+    && normalizeBottleSize(candidate.bottleSize) === normalizeBottleSize(bottleSize);
 }
 
 function fmtDate(d: string | Date): string {
@@ -313,6 +354,7 @@ export default function PriceComparePage() {
     const local = loadLocalSession();
     if (local) {
       setRows(local.rows);
+      setScannedIndices(local.rows.flatMap((row, index) => row.inScanList ? [index] : []));
       setFileName(local.fileName);
     }
 
@@ -329,6 +371,7 @@ export default function PriceComparePage() {
         if (cancelled) return;
         if (session?.rows.length) {
           setRows(session.rows);
+          setScannedIndices(session.rows.flatMap((row, index) => row.inScanList ? [index] : []));
           setFileName(session.fileName);
           setCloudSaved(true);
           if (!local?.rows.length) {
@@ -344,6 +387,7 @@ export default function PriceComparePage() {
       const session = await loadCloudSession(most.id);
       if (cancelled || !session?.rows.length) return;
       setRows(session.rows);
+      setScannedIndices(session.rows.flatMap((row, index) => row.inScanList ? [index] : []));
       setFileName(session.fileName);
       setCurrentSessionId(most.id);
       setCurrentSessionName(most.sessionName);
@@ -406,10 +450,10 @@ useEffect(() => {
       return;
     }
     setRows(session.rows);
+    setScannedIndices(session.rows.flatMap((row, index) => row.inScanList ? [index] : []));
     setFileName(session.fileName);
     setCurrentSessionId(meta.id);
     setCurrentSessionName(meta.sessionName);
-    setScannedIndices([]);
     setFilter("all");
     setSessionsOpen(false);
     saveLocalSession(session.fileName, session.rows);
@@ -550,10 +594,71 @@ useEffect(() => {
       michiganName: `${match.brandName} ${match.bottleSize}`,
       michiganBottleSize: match.bottleSize ?? null,
       michiganLiquorCode: match.liquorCode ?? null,
+      michiganUpc: match.upcCode1 ? normalizeCompareUpc(match.upcCode1) : null,
+      ...(row.priceBookOnly ? {
+        name: `${match.brandName} ${match.bottleSize}`,
+        liquorCode: match.liquorCode ?? row.liquorCode,
+        registerPrice: michiganPrice ?? row.registerPrice,
+        priceDiff: null,
+      } : {}),
       newPrice: michiganPrice ?? row.registerPrice,
     });
     setDisambigRow(null);
     toast({ title: "Match applied", description: `Linked to ${match.brandName} ${match.bottleSize}` });
+  };
+
+  const openPickMatch = async (origIdx: number, row: ComparisonRow) => {
+    const baseProductName = getBasePackageBrand(row.name);
+    const storedMatches = (row.allMatches || []).filter(candidate =>
+      row.priceBookOnly
+        ? isRelevantPackageAlternative(candidate, baseProductName, row.michiganBottleSize, row.michiganLiquorCode || row.liquorCode)
+        : !row.michiganBottleSize || normalizeBottleSize(candidate.bottleSize) === normalizeBottleSize(row.michiganBottleSize)
+    );
+    if (storedMatches.length > 1) {
+      const filteredRow = { ...row, allMatches: storedMatches, multipleMatches: true };
+      updateRow(origIdx, { allMatches: storedMatches, multipleMatches: true });
+      setDisambigRow({ origIdx, row: filteredRow });
+      return;
+    }
+
+    // For bundle rows search the base brand, then limit choices to the same
+    // bottle size, the scanned package, or the exact base-brand product. For regular
+    // rows, retain only exact UPC matches.
+    const lookup = row.priceBookOnly
+      ? (baseProductName || row.name)
+      : row.upc || row.michiganLiquorCode || row.liquorCode || row.name;
+    if (!lookup) {
+      toast({ variant: "destructive", title: "No match options", description: "This row does not have a UPC, liquor code, or name to look up." });
+      return;
+    }
+
+    try {
+      const res = await fetch(`/api/search-liquor?query=${encodeURIComponent(lookup)}`, { credentials: "include" });
+      const data = await res.json().catch(() => null);
+      if (!res.ok || !data?.success) throw new Error(data?.error || "Could not load match options.");
+
+      const candidates = (data.results || []) as LiquorRecord[];
+      const matches = row.priceBookOnly
+        ? candidates.filter(candidate => isRelevantPackageAlternative(candidate, baseProductName, row.michiganBottleSize, row.michiganLiquorCode || row.liquorCode))
+        : candidates.filter(candidate =>
+            [candidate.upcCode1, candidate.upcCode2]
+              .filter((upc): upc is string => !!upc)
+              .some(upc => normalizeBarcode(upc) === normalizeBarcode(row.upc))
+            && (!row.michiganBottleSize || normalizeBottleSize(candidate.bottleSize) === normalizeBottleSize(row.michiganBottleSize))
+          );
+
+      if (matches.length <= 1) {
+        updateRow(origIdx, { multipleMatches: false, allMatches: undefined });
+        toast({ title: "No alternate matches", description: "There are no other same-size Michigan products to choose from for this item." });
+        return;
+      }
+
+      const hydratedRow = { ...row, allMatches: matches, multipleMatches: true };
+      updateRow(origIdx, { allMatches: matches, multipleMatches: true });
+      setDisambigRow({ origIdx, row: hydratedRow });
+    } catch (err: any) {
+      toast({ variant: "destructive", title: "Could not load match options", description: err?.message || "Try refreshing the Michigan data and uploading the CSV again." });
+    }
   };
 
   // ── Sorting ───────────────────────────────────────────────────────────────
@@ -562,10 +667,15 @@ useEffect(() => {
     else { setSortKey(key); setSortDir("asc"); }
   };
 
+  // In CSV comparison mode, show the store price relative to the Michigan minimum.
+  // Scan mode keeps the existing Michigan-price-change direction.
+  const displayedPriceDiff = (row: ComparisonRow): number | null =>
+    pageMode === "csv" && row.priceDiff !== null ? -row.priceDiff : row.priceDiff;
+
   // ── Derived data ──────────────────────────────────────────────────────────
-  const totalIncreased = rows.filter(r => r.priceDiff !== null && r.priceDiff > 0).length;
-  const totalDecreased = rows.filter(r => r.priceDiff !== null && r.priceDiff < 0).length;
-  const totalSame      = rows.filter(r => r.priceDiff === 0).length;
+  const totalIncreased = rows.filter(r => displayedPriceDiff(r) !== null && displayedPriceDiff(r)! > 0).length;
+  const totalDecreased = rows.filter(r => displayedPriceDiff(r) !== null && displayedPriceDiff(r)! < 0).length;
+  const totalSame      = rows.filter(r => displayedPriceDiff(r) === 0).length;
   const totalNotFound  = rows.filter(r => !r.matched).length;
   const totalAmbiguous = rows.filter(r => r.multipleMatches && !r.resolvedByUser).length;
   const totalChanged   = rows.filter(r => Math.round((r.newPrice - r.registerPrice) * 100) !== 0).length;
@@ -573,9 +683,10 @@ useEffect(() => {
   const applyFilters = (source: { row: ComparisonRow; origIdx: number }[]) =>
     source
       .filter(({ row: r }) => {
-        if (filter === "increased") return r.priceDiff !== null && r.priceDiff > 0;
-        if (filter === "decreased") return r.priceDiff !== null && r.priceDiff < 0;
-        if (filter === "same")      return r.priceDiff === 0;
+        const diff = displayedPriceDiff(r);
+        if (filter === "increased") return diff !== null && diff > 0;
+        if (filter === "decreased") return diff !== null && diff < 0;
+        if (filter === "same")      return diff === 0;
         if (filter === "notfound")  return !r.matched;
         if (filter === "ambiguous") return r.multipleMatches && !r.resolvedByUser;
         return true;
@@ -590,7 +701,7 @@ useEffect(() => {
         if (sortKey === "name")               { av = a.row.name;          bv = b.row.name; }
         else if (sortKey === "registerPrice") { av = a.row.registerPrice; bv = b.row.registerPrice; }
         else if (sortKey === "michiganPrice") { av = a.row.michiganPrice ?? -1; bv = b.row.michiganPrice ?? -1; }
-        else if (sortKey === "priceDiff")     { av = a.row.priceDiff ?? 999; bv = b.row.priceDiff ?? 999; }
+        else if (sortKey === "priceDiff")     { av = displayedPriceDiff(a.row) ?? 999; bv = displayedPriceDiff(b.row) ?? 999; }
         else                                  { av = a.row.newPrice; bv = b.row.newPrice; }
         if (av < bv) return sortDir === "asc" ? -1 : 1;
         if (av > bv) return sortDir === "asc" ? 1  : -1;
@@ -610,7 +721,9 @@ useEffect(() => {
     const norm = normalizeBarcode(barcode);
     const matchingIndices = rows
       .map((r, i) => ({ r, i }))
-      .filter(({ r }) => { const ru = normalizeBarcode(r.upc); return ru === norm || ru === barcode; })
+      .filter(({ r }) => [r.upc, r.michiganUpc]
+        .filter((upc): upc is string => !!upc)
+        .some(upc => normalizeBarcode(upc) === norm || upc === barcode))
       .map(({ i }) => i);
 
     if (matchingIndices.length === 0) {
@@ -632,6 +745,72 @@ useEffect(() => {
 
         const productName = `${product.brandName} ${product.bottleSize || ''}`.trim();
         const shelfPrice = product.shelfPrice ?? 0;
+        let matchOptions: LiquorRecord[] = [];
+
+        if (data.requiresSelection && Array.isArray(data.matchedProducts)) {
+          // Keep true barcode collisions, but discard different bottle sizes.
+          matchOptions = data.matchedProducts.filter((candidate: LiquorRecord) =>
+            normalizeBottleSize(candidate.bottleSize) === normalizeBottleSize(product.bottleSize)
+          );
+        } else {
+          // Some bundle UPCs resolve to only the bundle record. Offer a narrow
+          // same-brand, same-size choice (bundle vs regular bottle), not every
+          // size and flavor returned by a broad brand search.
+          const baseBrand = getBasePackageBrand(product.brandName);
+          try {
+            const matchRes = await fetch(`/api/search-liquor?query=${encodeURIComponent(baseBrand)}`, { credentials: "include" });
+            const matchData = await matchRes.json().catch(() => null);
+            const related = ((matchData?.results || []) as LiquorRecord[])
+              .filter(candidate => isRelevantPackageAlternative(candidate, baseBrand, product.bottleSize, product.liquorCode));
+            matchOptions = [product, ...related];
+          } catch {
+            matchOptions = [product];
+          }
+        }
+
+        const uniqueMatchOptions = Array.from(new Map(
+          matchOptions.map(candidate => [candidate.liquorCode || candidate.id, candidate])
+        ).values());
+
+        // NRS exports can contain an unusable UPC while keeping the Michigan
+        // liquor code in the CSV "size" column. Resolve the scanned UPC through
+        // the price book, then link that result back to the imported CSV row by code.
+        const scannedLiquorCode = normalizeLiquorCode(product.liquorCode);
+        const csvMatchIdx = scannedLiquorCode
+          ? rows.findIndex(row => !row.priceBookOnly && normalizeLiquorCode(row.liquorCode) === scannedLiquorCode)
+          : -1;
+        if (csvMatchIdx >= 0) {
+          const csvRow = rows[csvMatchIdx];
+          const michiganPrice = product.shelfPrice ?? null;
+          const priceDiff = michiganPrice !== null
+            ? Math.round((michiganPrice - csvRow.registerPrice) * 100) / 100
+            : null;
+          setRows(prev => prev.map((row, index) => index === csvMatchIdx
+            ? {
+                ...row,
+                matched: true,
+                matchedBy: 'code',
+                multipleMatches: uniqueMatchOptions.length > 1,
+                allMatches: uniqueMatchOptions.length > 1 ? uniqueMatchOptions : undefined,
+                resolvedByUser: false,
+                michiganPrice,
+                michiganName: productName,
+                michiganBottleSize: product.bottleSize ?? null,
+                michiganLiquorCode: product.liquorCode ?? null,
+                michiganUpc: product.upcCode1 ? normalizeCompareUpc(product.upcCode1) : null,
+                priceDiff,
+                inScanList: true,
+              }
+            : row));
+          setScannedIndices(prev => prev.includes(csvMatchIdx) ? prev : [csvMatchIdx, ...prev]);
+          toast({
+            title: "Matched CSV item by liquor code",
+            description: productName + " was linked to its CSV row using liquor code " + product.liquorCode + ".",
+          });
+          return;
+        }
+
+        const hasAlternatives = uniqueMatchOptions.length > 1;
         const priceBookRow: ComparisonRow = {
           upc: barcode,
           name: productName,
@@ -640,40 +819,93 @@ useEffect(() => {
           liquorCode: product.liquorCode || '',
           matched: true,
           matchedBy: 'upc',
-          multipleMatches: !!data.requiresSelection,
-          allMatches: data.requiresSelection ? data.matchedProducts : undefined,
+          multipleMatches: hasAlternatives,
+          allMatches: hasAlternatives ? uniqueMatchOptions : undefined,
           resolvedByUser: false,
           michiganPrice: product.shelfPrice ?? null,
           michiganName: productName,
           michiganBottleSize: product.bottleSize ?? null,
           michiganLiquorCode: product.liquorCode ?? null,
+          michiganUpc: product.upcCode1 ? normalizeCompareUpc(product.upcCode1) : null,
           priceDiff: null,
           newPrice: shelfPrice,
           useCustomName: false,
           customName: productName,
           priceBookOnly: true,
+          inScanList: true,
         };
 
         const newIdx = rows.length;
         setRows(prev => [...prev, priceBookRow]);
         setScannedIndices(prev => [newIdx, ...prev]);
-        toast({ title: "Added from price book", description: `${productName} was not in your CSV.` });
+        if (priceBookRow.multipleMatches) {
+          toast({ title: "Added from price book", description: "Multiple products match this barcode. Use Pick match in the row to choose later." });
+        } else {
+          toast({ title: "Added from price book", description: `${productName} was not in your CSV.` });
+        }
       } catch (err: any) {
         toast({ variant: "destructive", title: "Not found", description: err.message });
       }
       return;
     }
     const newIdx = matchingIndices[0];
-    if (scannedIndices.includes(newIdx)) {
-      toast({ title: "Already in scan list", description: `${rows[newIdx].name} is already on the list.` });
-      return;
+
+    // A CSV UPC match can hide duplicate Michigan records because the price-book
+    // lookup used to run only when the UPC was absent from the CSV. Search the
+    // public price-book endpoint and keep exact UPC matches on the row for later.
+    let duplicateMatches = rows[newIdx].allMatches || [];
+    if (!rows[newIdx].allMatches?.length) {
+      try {
+        const res = await fetch(`/api/search-liquor?query=${encodeURIComponent(barcode)}`, { credentials: "include" });
+        const data = await res.json().catch(() => null);
+        const candidates = (data?.results || []) as LiquorRecord[];
+        duplicateMatches = candidates.filter(product =>
+          [product.upcCode1, product.upcCode2]
+            .filter((upc): upc is string => !!upc)
+            .some(upc => normalizeBarcode(upc) === norm)
+          && (!rows[newIdx].michiganBottleSize || normalizeBottleSize(product.bottleSize) === normalizeBottleSize(rows[newIdx].michiganBottleSize))
+        );
+        setRows(prev => prev.map((row, i) => i === newIdx
+          ? {
+              ...row,
+              multipleMatches: duplicateMatches.length > 1,
+              allMatches: duplicateMatches.length > 1 ? duplicateMatches : undefined,
+              inScanList: true,
+            }
+          : row));
+      } catch {
+        // Keep scanning usable if the optional ambiguity lookup is unavailable.
+      }
     }
-    setScannedIndices(prev => [newIdx, ...prev]);
-    toast({ title: "Added", description: rows[newIdx].name });
+
+    const alreadyScanned = scannedIndices.includes(newIdx);
+    if (!alreadyScanned) {
+      setRows(prev => prev.map((row, i) => i === newIdx ? { ...row, inScanList: true } : row));
+      setScannedIndices(prev => [newIdx, ...prev]);
+    }
+
+    if (duplicateMatches.length > 1 || rows[newIdx].multipleMatches) {
+      toast({
+        title: alreadyScanned ? "Already in scan list" : "Added",
+        description: "Multiple products match this barcode. Use Pick match in the row to choose later.",
+      });
+    } else if (alreadyScanned) {
+      toast({ title: "Already in scan list", description: `${rows[newIdx].name} is already on the list.` });
+    } else {
+      toast({ title: "Added", description: rows[newIdx].name });
+    }
   }, [rows, scannedIndices, toast]);
 
-  const removeFromScanList = (origIdx: number) => setScannedIndices(prev => prev.filter(i => i !== origIdx));
+  const removeFromScanList = (origIdx: number) => {
+    setScannedIndices(prev => prev.filter(i => i !== origIdx));
+    setRows(prev => prev.map((row, i) => i === origIdx ? { ...row, inScanList: false } : row));
+  };
+  const clearScanList = () => {
+    setScannedIndices([]);
+    setRows(prev => prev.map(row => row.inScanList ? { ...row, inScanList: false } : row));
+  };
 
+  const allScannedRows = scannedIndices.map(i => rows[i]);
   const scannedRowsWithIdx = scannedIndices
     .map(i => ({ row: rows[i], origIdx: i }))
     .filter(({ row: r }) => {
@@ -685,6 +917,7 @@ useEffect(() => {
   const scanIncreased = scannedIndices.filter(i => rows[i].priceDiff !== null && rows[i].priceDiff! > 0).length;
   const scanDecreased = scannedIndices.filter(i => rows[i].priceDiff !== null && rows[i].priceDiff! < 0).length;
   const scanAmbiguous = scannedIndices.filter(i => rows[i].multipleMatches && !rows[i].resolvedByUser).length;
+  const scanChanged = allScannedRows.filter(row => Math.round((row.newPrice - row.registerPrice) * 100) !== 0).length;
 
   // ── Export helpers ────────────────────────────────────────────────────────
   const doExport = (sourceRows: ComparisonRow[], customNames: boolean, filePrefix: string) => {
@@ -694,8 +927,8 @@ useEffect(() => {
     downloadCsv(csv, `${filePrefix}${suffix}.csv`);
     toast({ title: "Exported!", description: `Downloaded ${sourceRows.length} products.` });
   };
-  const exportChangedOnly = (customNames: boolean, filePrefix: string) => {
-    const changed = rows.filter(r => Math.round((r.newPrice - r.registerPrice) * 100) !== 0);
+  const exportChangedOnly = (customNames: boolean, filePrefix: string, sourceRows: ComparisonRow[] = rows) => {
+    const changed = sourceRows.filter(r => Math.round((r.newPrice - r.registerPrice) * 100) !== 0);
     if (changed.length === 0) { toast({ title: "No price changes" }); return; }
     doExport(changed, customNames, `${filePrefix}_changed`);
   };
@@ -759,6 +992,7 @@ useEffect(() => {
               <tr><td colSpan={showRemove ? 9 : 8} className="px-4 py-8 text-center text-muted-foreground">{emptyLabel}</td></tr>
             )}
             {rowsWithIdx.map(({ row, origIdx }) => {
+              const displayedUpc = row.priceBookOnly ? row.upc : row.michiganUpc || row.upc;
               const needsReview = row.multipleMatches && !row.resolvedByUser;
               const rowBg = needsReview ? "bg-orange-50/60" : !row.matched ? "bg-amber-50/40" : "";
               return (
@@ -776,7 +1010,11 @@ useEffect(() => {
                       )}
                     </div>
                   </td>
-                  <td className="px-3 py-2.5 font-mono text-xs text-muted-foreground whitespace-nowrap">{row.upc}</td>
+                  <td className="px-3 py-2.5 font-mono text-xs text-muted-foreground">
+                    <div className="block max-w-[9rem] truncate" title={displayedUpc}>
+                      {displayedUpc}
+                    </div>
+                  </td>
                   <td className="px-3 py-2.5 font-mono text-xs text-muted-foreground whitespace-nowrap">{row.michiganLiquorCode || row.liquorCode || "—"}</td>
                   <td className="px-3 py-2.5 text-right tabular-nums">${row.registerPrice.toFixed(2)}</td>
                   <td className="px-3 py-2.5 text-right tabular-nums">
@@ -784,8 +1022,8 @@ useEffect(() => {
                   </td>
                   <td className="px-3 py-2.5">
                     {needsReview
-                      ? <Badge className="text-xs bg-orange-100 text-orange-700 border-orange-200 hover:bg-orange-100 cursor-pointer" onClick={() => setDisambigRow({ origIdx, row })}>Pick match</Badge>
-                      : <DiffBadge diff={row.priceDiff} />
+                      ? <Badge className="text-xs bg-orange-100 text-orange-700 border-orange-200 hover:bg-orange-100 cursor-pointer" onClick={() => openPickMatch(origIdx, row)}>Pick match</Badge>
+                      : <DiffBadge diff={displayedPriceDiff(row)} />
                     }
                   </td>
                   <td className="px-3 py-2.5">
@@ -928,6 +1166,9 @@ useEffect(() => {
               <>
                 <Button variant="outline" size="sm" onClick={() => resetAllToMichigan(scannedRowsWithIdx)} data-testid="button-scan-reset">
                   <RefreshCw className="h-4 w-4 mr-1" />Reset to MI
+                </Button>
+                <Button variant="outline" size="sm" onClick={() => exportChangedOnly(false, "shelf_scan", allScannedRows)} data-testid="button-scan-export-changed">
+                  <Download className="h-4 w-4 mr-1" />Changed ({scanChanged})
                 </Button>
                 <Button variant="outline" size="sm" onClick={() => doExport(scannedRowsWithIdx.map(x => x.row), false, "shelf_scan")} data-testid="button-scan-export">
                   <Download className="h-4 w-4 mr-1" />Export P-touch
@@ -1082,7 +1323,7 @@ useEffect(() => {
               {scannedIndices.length > 0 && (
                 <div className="flex gap-2 flex-wrap">
                   <Input placeholder="Search scanned items…" value={scanSearch} onChange={e => setScanSearch(e.target.value)} className="h-8 w-52 text-sm" />
-                  <Button variant="outline" size="sm" onClick={() => setScannedIndices([])} data-testid="button-scan-clear">
+                  <Button variant="outline" size="sm" onClick={clearScanList} data-testid="button-scan-clear">
                     <Trash2 className="h-4 w-4 mr-1" />Clear list
                   </Button>
                 </div>
@@ -1095,6 +1336,9 @@ useEffect(() => {
                 <div className="flex items-center justify-between text-xs text-muted-foreground px-1 flex-wrap gap-2">
                   <span>{scannedIndices.length} item{scannedIndices.length !== 1 ? "s" : ""} in scan list</span>
                   <div className="flex gap-2">
+                    <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => exportChangedOnly(false, "shelf_scan", allScannedRows)}>
+                      <Download className="h-3 w-3 mr-1" />Changed ({scanChanged})
+                    </Button>
                     <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => doExport(scannedRowsWithIdx.map(x => x.row), false, "shelf_scan")}>
                       <Download className="h-3 w-3 mr-1" />Export P-touch CSV
                     </Button>
@@ -1182,17 +1426,26 @@ useEffect(() => {
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <HelpCircle className="h-5 w-5 text-orange-500" />
-              Multiple Michigan records for this UPC
+              Choose the correct Michigan product
             </DialogTitle>
             <DialogDescription>
-              UPC <span className="font-mono">{disambigRow?.row.upc}</span> matches{" "}
-              {disambigRow?.row.allMatches?.length ?? 0} products. Pick the one that matches <strong>{disambigRow?.row.name}</strong>.
+              UPC <span className="font-mono">{disambigRow?.row.upc}</span> currently points to{" "}
+              <strong>{disambigRow?.row.name}</strong>. Pick the price-book product that matches the bottle you scanned.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-2 max-h-[60vh] overflow-y-auto pr-1">
+            {!disambigRow?.row.allMatches?.length && (
+              <div className="rounded-lg border border-dashed border-border px-4 py-6 text-center text-sm text-muted-foreground">
+                No match options are loaded for this row. Close this dialog and click Pick match again, or refresh the Michigan data and re-import the CSV.
+              </div>
+            )}
             {disambigRow?.row.allMatches?.map((match, i) => {
               const miPrice = match.shelfPrice ?? null;
-              const diff    = miPrice !== null ? Math.round((miPrice - disambigRow.row.registerPrice) * 100) / 100 : null;
+              const diff    = miPrice !== null
+                ? Math.round((pageMode === "csv"
+                  ? disambigRow.row.registerPrice - miPrice
+                  : miPrice - disambigRow.row.registerPrice) * 100) / 100
+                : null;
               const isCurr  = disambigRow.row.resolvedByUser && disambigRow.row.michiganName === `${match.brandName} ${match.bottleSize}`;
               return (
                 <button key={i} onClick={() => applyMatch(disambigRow.origIdx, match)}

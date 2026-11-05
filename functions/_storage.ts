@@ -48,8 +48,56 @@ export class D1Storage {
     await this.db.delete(schema.liquorRecords);
   }
 
+  async bulkUpdateLiquorRecordPrices(records: Array<{ liquorCode: string; onPremisePrice: number | string | null; offPremisePrice: number | string | null; shelfPrice: number | string | null }>): Promise<void> {
+    const CHUNK = 50;
+    for (let i = 0; i < records.length; i += CHUNK) {
+      const chunk = records.slice(i, i + CHUNK);
+      await this.db.batch(
+        chunk.map((record) => {
+          const norm = normalizeUpc(record.liquorCode);
+          if (!norm || norm === '0') return null;
+          return this.db.update(schema.liquorRecords)
+            .set({
+              onPremisePrice: record.onPremisePrice === null ? null : Number(record.onPremisePrice),
+              offPremisePrice: record.offPremisePrice === null ? null : Number(record.offPremisePrice),
+              shelfPrice: record.shelfPrice === null ? null : Number(record.shelfPrice),
+            })
+            .where(sql`ltrim(${schema.liquorRecords.liquorCode}, '0') = ${norm}`);
+        }).filter(Boolean) as any
+      );
+    }
+  }
+
   async getLiquorRecords(): Promise<any[]> {
     return this.db.select().from(schema.liquorRecords);
+  }
+
+  async findLiquorRecordsForCompare(upcs: string[], codes: string[]): Promise<any[]> {
+    const UPC_BATCH_SIZE = 30;
+    const CODE_BATCH_SIZE = 30;
+    const uniqueUpcs = [...new Set(upcs)].filter((value) => value && value !== '0');
+    const uniqueCodes = [...new Set(codes)].filter((value) => value && value !== '0');
+    const batchCount = Math.max(Math.ceil(uniqueUpcs.length / UPC_BATCH_SIZE), Math.ceil(uniqueCodes.length / CODE_BATCH_SIZE));
+    const found = new Map<string, any>();
+
+    for (let batch = 0; batch < batchCount; batch++) {
+      const upcBatch = uniqueUpcs.slice(batch * UPC_BATCH_SIZE, (batch + 1) * UPC_BATCH_SIZE);
+      const codeBatch = uniqueCodes.slice(batch * CODE_BATCH_SIZE, (batch + 1) * CODE_BATCH_SIZE);
+      const conditions = [];
+      if (upcBatch.length) {
+        const normalizedUpc1 = sql`CASE WHEN length(${schema.liquorRecords.upcCode1}) > 12 AND substr(${schema.liquorRecords.upcCode1}, 1, 1) = '0' THEN substr(${schema.liquorRecords.upcCode1}, -12) ELSE ${schema.liquorRecords.upcCode1} END`;
+        const normalizedUpc2 = sql`CASE WHEN length(${schema.liquorRecords.upcCode2}) > 12 AND substr(${schema.liquorRecords.upcCode2}, 1, 1) = '0' THEN substr(${schema.liquorRecords.upcCode2}, -12) ELSE ${schema.liquorRecords.upcCode2} END`;
+        conditions.push(inArray(normalizedUpc1, upcBatch), inArray(normalizedUpc2, upcBatch));
+      }
+      if (codeBatch.length) {
+        conditions.push(inArray(sql`ltrim(${schema.liquorRecords.liquorCode}, '0')`, codeBatch));
+      }
+      if (!conditions.length) continue;
+      const batchRows = await this.db.select().from(schema.liquorRecords).where(or(...conditions));
+      for (const record of batchRows) found.set(record.id, record);
+    }
+
+    return [...found.values()];
   }
 
   async getLiquorRecordById(id: string): Promise<any | undefined> {

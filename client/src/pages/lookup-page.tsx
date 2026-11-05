@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState, useCallback } from "react";
-import { getAuthHeaders } from "@/lib/queryClient";
 import { BrowserMultiFormatReader } from "@zxing/browser";
 import { DecodeHintType } from "@zxing/library";
 import { scanImageData, setModuleArgs } from "@undecaf/zbar-wasm";
@@ -262,22 +261,22 @@ export default function LookupPage() {
 
     setIsLooking(true);
     try {
-      const authHeaders = await getAuthHeaders();
-      const res  = await fetch("/api/scan-barcode", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", ...authHeaders },
-        body: JSON.stringify({ barcode: code, sessionId: null }),
-      });
+      const res = await fetch(`/api/search-liquor?query=${encodeURIComponent(code)}`);
       const data = await res.json();
+      const normalizeCode = (value: unknown) => String(value ?? "").replace(/\D/g, "").replace(/^0+/, "") || "0";
+      const normalizedCode = normalizeCode(code);
+      const matchedProducts = (data.results || []).filter((record: LiquorRecord) =>
+        [record.upcCode1, record.upcCode2, record.liquorCode].some(value => normalizeCode(value) === normalizedCode)
+      );
 
-      if (data.success && data.requiresSelection && data.matchedProducts?.length) {
+      if (matchedProducts.length > 1) {
         vibrate([80, 40, 80]);
         playBeep(true);
-        setProduct({ record: data.matchedProducts[0], barcode: code, multiple: data.matchedProducts });
-      } else if (data.success && data.matchedProduct) {
+        setProduct({ record: matchedProducts[0], barcode: code, multiple: matchedProducts });
+      } else if (matchedProducts.length === 1) {
         vibrate(100);
         playBeep(true);
-        setProduct({ record: data.matchedProduct, barcode: code });
+        setProduct({ record: matchedProducts[0], barcode: code });
       } else {
         vibrate([80, 60, 80, 60, 80]);
         playBeep(false);

@@ -24,6 +24,7 @@ export interface IStorage {
   // Liquor record methods
   createLiquorRecord(record: InsertLiquorRecord): Promise<LiquorRecord>;
   bulkCreateLiquorRecords(records: InsertLiquorRecord[]): Promise<void>;
+  bulkUpdateLiquorRecordPrices(records: Pick<InsertLiquorRecord, 'liquorCode' | 'onPremisePrice' | 'offPremisePrice' | 'shelfPrice'>[]): Promise<void>;
   getLiquorRecords(): Promise<LiquorRecord[]>;
   getLiquorRecordById(id: string): Promise<LiquorRecord | undefined>;
   clearLiquorRecords(): Promise<void>;
@@ -89,6 +90,24 @@ export class DatabaseStorage implements IStorage {
     const CHUNK = 500;
     for (let i = 0; i < records.length; i += CHUNK) {
       await this.db.insert(liquorRecords).values(records.slice(i, i + CHUNK));
+    }
+  }
+
+  async bulkUpdateLiquorRecordPrices(records: Pick<InsertLiquorRecord, 'liquorCode' | 'onPremisePrice' | 'offPremisePrice' | 'shelfPrice'>[]): Promise<void> {
+    const CHUNK = 200;
+    for (let i = 0; i < records.length; i += CHUNK) {
+      const chunk = records.slice(i, i + CHUNK);
+      await Promise.all(chunk.map((record) => {
+        const norm = normalizeUpc(record.liquorCode);
+        if (!norm || norm === '0') return Promise.resolve();
+        return this.db.update(liquorRecords)
+          .set({
+            onPremisePrice: record.onPremisePrice ?? null,
+            offPremisePrice: record.offPremisePrice ?? null,
+            shelfPrice: record.shelfPrice ?? null,
+          })
+          .where(sql`ltrim(${liquorRecords.liquorCode}, '0') = ${norm}`);
+      }));
     }
   }
 
@@ -401,6 +420,20 @@ export class MemStorage implements IStorage {
 
   async bulkCreateLiquorRecords(records: InsertLiquorRecord[]): Promise<void> {
     for (const r of records) await this.createLiquorRecord(r);
+  }
+
+  async bulkUpdateLiquorRecordPrices(records: Pick<InsertLiquorRecord, 'liquorCode' | 'onPremisePrice' | 'offPremisePrice' | 'shelfPrice'>[]): Promise<void> {
+    const updates = new Map(records.map((record) => [normalizeUpc(record.liquorCode), record]));
+    for (const [id, existing] of Array.from(this.liquorRecordsMap.entries())) {
+      const update = updates.get(normalizeUpc(existing.liquorCode));
+      if (!update) continue;
+      this.liquorRecordsMap.set(id, {
+        ...existing,
+        onPremisePrice: update.onPremisePrice ?? null,
+        offPremisePrice: update.offPremisePrice ?? null,
+        shelfPrice: update.shelfPrice ?? null,
+      });
+    }
   }
 
   async getLiquorRecords(): Promise<LiquorRecord[]> { return Array.from(this.liquorRecordsMap.values()); }
